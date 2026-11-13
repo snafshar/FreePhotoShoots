@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "parts.html" import token %}
+{% block content %}
+<div class="shell studio">
+  <header class="studio-heading">
+    <div><p class="eyebrow">Silvergrain Studio</p><h1>Dashboard</h1></div>
+    <div class="studio-actions">
+      <a class="button button-light" href="/admin/stories/new">New story <span aria-hidden="true">+</span></a>
+      <form method="post" action="/admin/sign-out">{{ token(csrf) }}<button class="button" type="submit">Sign out</button></form>
+    </div>
+  </header>
+  <nav class="studio-nav" aria-label="Dashboard">
+    <a href="/admin"{% if section == 'stories' %} aria-current="page"{% endif %}>Stories</a>
+    <a href="/admin/comments"{% if section == 'comments' %} aria-current="page"{% endif %}>Comments{% if counts.pending %} <span>{{ counts.pending }}</span>{% endif %}</a>
+    <a href="/admin/inbox"{% if section == 'inbox' %} aria-current="page"{% endif %}>Inbox{% if counts.unread %} <span>{{ counts.unread }}</span>{% endif %}</a>
+    <a href="/admin/settings"{% if section == 'settings' %} aria-current="page"{% endif %}>Settings</a>
+  </nav>
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  {% if error %}<p class="notice" role="alert">{{ error }}</p>{% endif %}
+
+  {% if section == 'stories' %}
+  <div class="dashboard-content">
+    <div class="section-heading studio-section-heading">
+      <h2>Stories</h2>
+      <nav class="filters" aria-label="Filter your stories">
+        <a class="filter" href="/admin"{% if tab == 'all' %} aria-current="true"{% endif %}>All</a>
+        <a class="filter" href="/admin?view=published"{% if tab == 'published' %} aria-current="true"{% endif %}>Published {{ counts.published }}</a>
+        <a class="filter" href="/admin?view=draft"{% if tab == 'draft' %} aria-current="true"{% endif %}>Drafts {{ counts.draft }}</a>
+      </nav>
+    </div>
+    <ul class="studio-list">
+      {% for entry in entries %}
+      <li class="studio-row">
+        <div class="studio-thumb">{% if entry.photo_id %}<img src="{{ photo_url(entry, true) }}" alt="" loading="lazy">{% endif %}</div>
+        <div class="studio-entry"><a href="/admin/stories/{{ entry.id }}">{{ entry.title }}</a><p>{{ entry.category }} / {{ entry.photo_count }} {{ 'photo' if entry.photo_count == 1 else 'photos' }}{% if entry.demo %} / Sample{% endif %}</p></div>
+        <span class="entry-state{% if entry.published_at is not none %} published{% endif %}">{{ 'Published' if entry.published_at is not none else 'Draft' }}</span>
+        <a class="button compact" href="/admin/stories/{{ entry.id }}" aria-label="Edit {{ entry.title }}">Edit <span aria-hidden="true">↗</span></a>
+      </li>
+      {% else %}<li class="empty">There are no stories in this view.</li>{% endfor %}
+    </ul>
+  </div>
+  {% elif section == 'comments' %}
+  <section class="dashboard-content">
+    <div class="section-heading"><h2>Comments</h2><span class="muted">{{ counts.pending }} pending</span></div>
+    {% for entry in entries %}
+    <article class="inbox-item">
+      <div class="entry-meta"><strong>{{ entry.name }}</strong><time>{{ entry.created_at | display_date }}</time></div>
+      <a class="small-link" href="/stories/{{ entry.slug }}#comments">{{ entry.title }} ↗</a>
+      <p class="prose">{{ entry.body }}</p>
+      <div class="item-actions">
+        <span class="entry-state">{{ entry.status | capitalize }}</span>
+        <form method="post" action="/admin/comments/{{ entry.id }}/action">
+          {{ token(csrf) }}
+          {% if entry.status == 'pending' %}<button class="button compact" name="action" value="approve">Approve</button>{% else %}<button class="button compact" name="action" value="hide">Hide</button>{% endif %}
+          <button class="button compact" name="action" value="delete">Delete</button>
+        </form>
+      </div>
+    </article>
+    {% else %}<p class="empty">Comments submitted to your stories will appear here.</p>{% endfor %}
+  </section>
+  {% elif section == 'inbox' %}
+  <section class="dashboard-content">
+    <div class="section-heading"><h2>Inbox</h2><span class="muted">{{ counts.unread }} unread</span></div>
+    {% for entry in entries %}
+    <article class="inbox-item">
+      <div class="entry-meta"><strong>{{ entry.name }}</strong><time>{{ entry.created_at | display_date }}</time></div>
+      <a class="small-link" href="{{ entry.email | mailto }}">{{ entry.email }} ↗</a>
+      <p class="prose">{{ entry.body }}</p>
+      <div class="item-actions">
+        <span class="entry-state">{{ 'Read' if entry.read_at else 'Unread' }}</span>
+        <form method="post" action="/admin/inbox/{{ entry.id }}/action">
+          {{ token(csrf) }}
+          <button class="button compact" name="action" value="{{ 'unread' if entry.read_at else 'read' }}">{{ 'Mark unread' if entry.read_at else 'Mark read' }}</button>
+          <button class="button compact" name="action" value="delete">Delete</button>
+        </form>
+      </div>
+    </article>
+    {% else %}<p class="empty">Messages from the contact page will appear here.</p>{% endfor %}
+  </section>
+  {% else %}
+  <section class="dashboard-content settings-panel">
+    <div class="section-heading"><h2>Public details</h2></div>
+    <form class="form" method="post" action="/admin/settings">
+      {{ token(csrf) }}
+      <label class="field">Display name <input name="name" value="{{ site.name }}" maxlength="100" required></label>
+      <label class="field">Public email <input name="email" value="{{ site.email }}" type="email" maxlength="254" autocomplete="email"></label>
+      <label class="field">Public phone <input name="phone" value="{{ site.phone }}" type="tel" maxlength="32" autocomplete="tel"></label>
+      <button class="button button-light" type="submit">Save details <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

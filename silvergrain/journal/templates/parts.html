@@ -1,0 +1,41 @@
+{% macro card(post, level=3) -%}
+<article class="story-card">
+  <a href="/stories/{{ post.slug }}">
+    {% if post.photo_id %}
+    <div class="card-image"><img src="{{ photo_url(post, true) }}" alt="{{ post.alt }}" width="720" height="480" loading="lazy"></div>
+    {% endif %}
+    <div class="card-meta">
+      <span>{{ post.category }}{% if post.photo_date %} <span aria-hidden="true">/</span> <time datetime="{{ post.photo_date }}">{{ post.photo_date | display_date }}</time>{% endif %}</span>
+      <span>{{ post.photo_count }} {{ 'photo' if post.photo_count == 1 else 'photos' }}</span>
+    </div>
+    <div class="card-title"><h{{ level }}>{{ post.title }}</h{{ level }}><span class="diagonal" aria-hidden="true">↗</span></div>
+  </a>
+</article>
+{%- endmacro %}
+
+{% macro token(csrf) -%}
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{%- endmacro %}
+
+{% macro trap() -%}
+<div class="trap" aria-hidden="true" inert>
+  <label>Leave this empty <input name="company" type="text" tabindex="-1" autocomplete="off"></label>
+</div>
+{%- endmacro %}
+
+{% macro slider_controls(count, description, dots=true) -%}
+<div class="slider-controls" data-controls hidden>
+  {% if dots %}
+  <div class="slider-dots" aria-label="{{ description }}">
+    {% for i in range(count) %}
+    <button class="slider-dot" type="button" data-goto="{{ i }}" aria-label="{{ description }} {{ i + 1 }}"{% if loop.first %} aria-current="true"{% endif %}></button>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="slider-step">
+    <button type="button" class="icon-button" data-prev aria-label="Previous {{ description | lower }}"><span aria-hidden="true">←</span></button>
+    <span class="slider-count" aria-live="polite"><span data-count>01</span> <span aria-hidden="true">/</span> {{ '%02d' | format(count) }}</span>
+    <button type="button" class="icon-button" data-next aria-label="Next {{ description | lower }}"><span aria-hidden="true">→</span></button>
+  </div>
+</div>
+{%- endmacro %}

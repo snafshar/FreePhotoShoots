@@ -1,0 +1,7 @@
+{
+  "name": "silvergrain",
+  "private": true,
+  "scripts": {
+    "dev": "sh scripts/preview.sh"
+  }
+}

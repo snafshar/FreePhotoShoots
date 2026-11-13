@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "parts.html" import card, slider_controls %}
+{% block content %}
+{% if cards %}
+<section class="hero" aria-label="Featured stories" data-slider>
+  <div class="hero-window" data-slider-touch>
+    {% for post in cards %}
+    <article class="hero-slide" data-slide{% if not loop.first %} hidden{% endif %}>
+      {% if post.photo_id %}
+      <picture>
+        <source media="(max-width: 680px)" srcset="{{ photo_url(post, true) }}">
+        <img class="hero-image" src="{{ photo_url(post) }}" alt="{{ post.alt }}"{% if loop.first %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>
+      </picture>
+      {% endif %}
+      <div class="shell hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow hero-kicker">Featured story{% if post.demo %}<span class="hero-sample"> / Sample</span>{% endif %}</p>
+          {% if loop.first %}<h1>{% else %}<h2>{% endif %}
+          {% if post.demo and post.title == 'Where the light falls' %}Where the<br><em>light falls</em>{% else %}{{ post.title }}{% endif %}
+          {% if loop.first %}</h1>{% else %}</h2>{% endif %}
+          {% if post.caption %}<p class="hero-caption">{{ post.caption }}</p>{% endif %}
+          <a class="button button-light hero-button" href="/stories/{{ post.slug }}">Read the story <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  <div class="hero-bottom shell">
+    <span class="hero-context">{{ site.name }} <span aria-hidden="true">/</span> Photography journal</span>
+    {% if cards | length > 1 %}{{ slider_controls(cards | length, 'Story') }}{% endif %}
+  </div>
+</section>
+{% else %}
+<section class="shell intro empty-home">
+  <p class="eyebrow">Photography journal</p>
+  <h1>Silvergrain</h1>
+  <p class="muted">Stories will appear here when they’re published.</p>
+</section>
+{% endif %}
+{% if cards | length > 1 %}
+<section class="shell recent" aria-labelledby="recent-title">
+  <div class="section-heading">
+    <h2 id="recent-title">Recent stories</h2>
+    <a class="small-link" href="/journal">View journal <span aria-hidden="true">↗</span></a>
+  </div>
+  <div class="story-grid">
+    {% for post in cards[1:] %}{{ card(post) }}{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

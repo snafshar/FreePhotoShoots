@@ -1,0 +1,1 @@
+"""Silvergrain photography journal."""

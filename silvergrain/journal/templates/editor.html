@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% from "parts.html" import token %}
+{% block content %}
+<div class="shell studio editor">
+  <a class="small-link back-link" href="/admin"><span aria-hidden="true">←</span> Dashboard</a>
+  <div class="studio-heading editor-heading">
+    <h1>{{ 'Edit story' if post else 'New story' }}</h1>
+    {% if post %}<a class="button" href="/stories/{{ post.slug }}">{{ 'View story' if post.published_at is not none else 'Preview draft' }} <span aria-hidden="true">↗</span></a>{% endif %}
+  </div>
+  {% if error %}<p class="notice" role="alert">{{ error }}{% if reselect %} Select your new image files again before saving.{% endif %}</p>{% endif %}
+  <form class="form editor-form" method="post" enctype="multipart/form-data">
+    {{ token(csrf) }}
+    {% if post %}<input type="hidden" name="revision" value="{{ post.revision }}">{% endif %}
+    <div class="editor-grid">
+      <section class="form editor-panel" aria-label="Story details">
+        <label class="field">Title <input name="title" value="{{ values.title }}" maxlength="100" required></label>
+        <label class="field">Caption <textarea name="caption" rows="2" maxlength="300">{{ values.caption }}</textarea></label>
+        <div class="field-row">
+          <label class="field">Category <select name="category">{% for name in categories %}<option{% if name == values.category %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+          <label class="field">Photo date <input type="date" name="photo_date" value="{{ values.photo_date }}"></label>
+        </div>
+        <label class="field">Location <input name="location" value="{{ values.location }}" maxlength="100"></label>
+        <label class="field">Story <textarea name="story" rows="9" maxlength="12000">{{ values.story }}</textarea></label>
+      </section>
+      <section class="editor-panel editor-photos" aria-labelledby="photos-heading">
+        <h2 id="photos-heading">Photographs</h2>
+        <p class="muted">Up to 10 JPEG, PNG or WebP images, 16 MB each. The first photo becomes the cover.</p>
+        {% if photos %}
+        <div class="existing-photos" data-photo-order>
+          {% for photo in photos %}
+          <div class="editor-photo" data-photo>
+            <input type="hidden" name="photo_order" value="{{ photo.photo_id }}">
+            <div class="editor-photo-top">
+              <img src="{{ photo_url(photo, true) }}" alt="{{ photo.alt }}" loading="lazy">
+              <div class="reorder" aria-label="Reorder photo">
+                <button class="icon-button" type="button" data-move="-1" aria-label="Move photo earlier">↑</button>
+                <button class="icon-button" type="button" data-move="1" aria-label="Move photo later">↓</button>
+              </div>
+              <label class="check"><input type="checkbox" name="remove_photo" value="{{ photo.photo_id }}"> Remove</label>
+            </div>
+            <label class="field">Alt text <input name="alt_{{ photo.photo_id }}" value="{{ photo.alt }}" maxlength="200"></label>
+            <label class="field">Photo caption <input name="caption_{{ photo.photo_id }}" value="{{ photo.caption }}" maxlength="300"></label>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <label class="field upload-field">Add photographs <input type="file" name="photos" accept="image/jpeg,image/png,image/webp" multiple data-upload></label>
+        <div class="uploads" data-uploads></div>
+        <template data-upload-template>
+          <div class="editor-photo upload-preview">
+            <div class="editor-photo-top">
+              <img alt="">
+              <span class="upload-filename"></span>
+              <button class="button compact" type="button" data-remove-upload>Remove</button>
+            </div>
+            <label class="field">Alt text <input maxlength="200" data-upload-alt></label>
+            <label class="field">Photo caption <input maxlength="300" data-upload-caption></label>
+          </div>
+        </template>
+      </section>
+    </div>
+    <div class="editor-actions">
+      {% if post and post.published_at is not none %}
+      <button class="button button-light" type="submit" name="intent" value="save">Save changes</button>
+      <button class="button" type="submit" name="intent" value="draft">Unpublish</button>
+      {% else %}
+      <button class="button button-light" type="submit" name="intent" value="draft">Save draft</button>
+      <button class="button" type="submit" name="intent" value="publish">Publish story <span aria-hidden="true">↗</span></button>
+      {% endif %}
+    </div>
+  </form>
+  {% if post %}
+  <details class="delete-story">
+    <summary>Delete story</summary>
+    <form class="form" method="post" action="/admin/stories/{{ post.id }}/action">
+      {{ token(csrf) }}
+      <input type="hidden" name="revision" value="{{ post.revision }}">
+      <label class="check"><input type="checkbox" name="confirm" value="yes" required> Delete this story, its photos, and its comments.</label>
+      <button class="button" type="submit" name="action" value="delete">Delete permanently</button>
+    </form>
+  </details>
+  {% endif %}
+</div>
+{% endblock %}

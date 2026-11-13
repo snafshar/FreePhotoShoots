@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "parts.html" import token, trap %}
+{% block head %}{% if site_key %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endif %}{% endblock %}
+{% block content %}
+<div class="shell contact-page">
+  <section class="intro">
+    <h1>Contact me</h1>
+    {% if site.email or site.phone %}
+    <address class="contact-details">
+      {% if site.email %}<div><span class="eyebrow">Email</span><a href="{{ site.email | mailto }}">{{ site.email }} <span aria-hidden="true">↗</span></a></div>{% endif %}
+      {% if site.phone %}<div><span class="eyebrow">Phone</span><a href="{{ site.phone | tel }}">{{ site.phone }} <span aria-hidden="true">↗</span></a></div>{% endif %}
+    </address>
+    {% endif %}
+  </section>
+  <section class="contact-card" id="contact-form" aria-labelledby="message-heading">
+    <h2 id="message-heading">Send a message</h2>
+    <form class="form" method="post" action="/contact#contact-form">
+      {{ token(csrf) }}{{ trap() }}
+      {% if sent %}<p class="notice" role="status">Your message was sent.</p>{% endif %}
+      {% if error %}<p class="notice" role="alert">{{ error }}</p>{% endif %}
+      <div class="field-row">
+        <label class="field">Name <input name="name" value="{{ submitted.get('name', '') }}" autocomplete="name" maxlength="60" required></label>
+        <label class="field">Email <input name="email" type="email" value="{{ submitted.get('email', '') }}" autocomplete="email" maxlength="254" required></label>
+      </div>
+      <label class="field">Message <textarea name="body" rows="5" maxlength="3000" required>{{ submitted.get('body', '') }}</textarea></label>
+      {% if site_key %}
+      <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-theme="dark" data-action="contact" data-size="flexible"></div>
+      {% else %}
+      <div class="contact-challenge">
+        <input type="hidden" name="challenge" value="{{ challenge[1] }}">
+        <label class="field"><span>Verification · {{ challenge[0] }}</span><input name="answer" inputmode="numeric" autocomplete="off" maxlength="3" required></label>
+      </div>
+      {% endif %}
+      <button class="button button-light" type="submit">Send message <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+</div>
+{% endblock %}

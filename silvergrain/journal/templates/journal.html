@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "parts.html" import card %}
+{% block content %}
+<div class="shell journal-page" data-paged>
+  <section class="intro page-heading">
+    <h1>Journal</h1>
+    {% if used_categories %}
+    <nav class="filters" aria-label="Filter by category">
+      <a class="filter" href="/journal"{% if not category %} aria-current="true"{% endif %}>All stories</a>
+      {% for name in used_categories %}
+      <a class="filter" href="/journal?category={{ name | urlencode }}"{% if category == name %} aria-current="true"{% endif %}>{{ name }}</a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+  </section>
+  {% if cards %}
+  <div class="story-grid archive-grid" data-page-touch>
+    {% for post in cards %}{{ card(post, 2) }}{% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">There are no published stories here yet.</p>
+  {% endif %}
+  {% if page_count > 1 %}
+  <nav class="pager" aria-label="Journal pages">
+    {% if page > 1 %}<a class="button" href="{% if page == 2 %}/journal{% else %}/journal/page/{{ page - 1 }}{% endif %}{{ query }}" rel="prev" data-page-prev>← Previous</a>{% else %}<span></span>{% endif %}
+    <span>Page {{ page }} of {{ page_count }}</span>
+    {% if page < page_count %}<a class="button" href="/journal/page/{{ page + 1 }}{{ query }}" rel="next" data-page-next>Next →</a>{% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+</div>
+{% endblock %}

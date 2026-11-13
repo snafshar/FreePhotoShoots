@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "parts.html" import slider_controls, token, trap %}
+{% block content %}
+<article class="shell post-page" data-paged>
+  <header class="post-heading" data-page-touch>
+    <a class="small-link back-link" href="/journal"><span aria-hidden="true">←</span> Journal</a>
+    <p class="eyebrow story-byline">{{ post.category }}{% if post.location %} / {{ post.location }}{% endif %}{% if post.photo_date %} / <time datetime="{{ post.photo_date }}">{{ post.photo_date | display_date }}</time>{% endif %}{% if post.demo %} / Sample story{% endif %}{% if post.published_at is none %} / Draft preview{% endif %}</p>
+    <h1>{{ post.title }}</h1>
+    {% if post.caption %}<p class="lead">{{ post.caption }}</p>{% endif %}
+  </header>
+  {% if photos %}
+  <section class="photo-gallery" aria-label="Story photographs" data-slider data-gallery>
+    <div class="photo-window" data-slider-touch{% if photos | length == 1 %} data-page-touch{% endif %}>
+      {% for photo in photos %}
+      <figure data-slide>
+        <button class="photo-open" type="button" data-open-photo data-src="{{ photo_url(photo) }}" aria-label="Open photo {{ loop.index }} full screen">
+          <img src="{{ photo_url(photo) }}" alt="{{ photo.alt or ('Photo ' ~ loop.index ~ ' from ' ~ post.title) }}" width="{{ photo.width }}" height="{{ photo.height }}"{% if not loop.first %} loading="lazy"{% endif %}>
+          <span class="expand" aria-hidden="true">⤢</span>
+        </button>
+        {% if photo.caption %}<figcaption>{{ photo.caption }}</figcaption>{% endif %}
+      </figure>
+      {% endfor %}
+    </div>
+    {% if photos | length > 1 %}{{ slider_controls(photos | length, 'Photo') }}{% endif %}
+    <dialog class="lightbox" aria-label="Full screen photograph">
+      <button class="icon-button lightbox-close" type="button" data-close-photo aria-label="Close photo">×</button>
+      <img alt="">
+    </dialog>
+  </section>
+  {% endif %}
+  {% if post.story %}<div class="reading prose" data-page-touch>{{ post.story }}</div>{% endif %}
+  {% if neighbors[0] or neighbors[1] %}
+  <nav class="story-nav" aria-label="Browse story pages" data-page-touch>
+    {% if neighbors[0] %}
+    <a href="/stories/{{ neighbors[0].slug }}" rel="prev" data-page-prev><span class="eyebrow">← Newer story</span><span class="neighbor-title">{{ neighbors[0].title }}</span></a>
+    {% else %}<span></span>{% endif %}
+    {% if neighbors[1] %}
+    <a href="/stories/{{ neighbors[1].slug }}" rel="next" data-page-next><span class="eyebrow">Older story →</span><span class="neighbor-title">{{ neighbors[1].title }}</span></a>
+    {% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+  {% if post.published_at is not none %}
+  <section class="reading comments" id="comments">
+    <div class="section-heading"><h2>Comments</h2><span class="muted">{{ comment_count }}</span></div>
+    {% for comment in comments %}
+    <article class="comment">
+      <div class="entry-meta"><strong>{{ comment.name }}</strong><time>{{ comment.created_at | display_date }}</time></div>
+      <p>{{ comment.body }}</p>
+    </article>
+    {% else %}<p class="muted">Be the first to leave a comment.</p>{% endfor %}
+    {% if comment_pages > 1 %}
+    <nav class="pager comment-pager" aria-label="Comment pages">
+      {% if comment_page > 1 %}<a class="button compact" href="?comments={{ comment_page - 1 }}#comments">← Newer</a>{% else %}<span></span>{% endif %}
+      <span>{{ comment_page }} / {{ comment_pages }}</span>
+      {% if comment_page < comment_pages %}<a class="button compact" href="?comments={{ comment_page + 1 }}#comments">Older →</a>{% else %}<span></span>{% endif %}
+    </nav>
+    {% endif %}
+    <form class="form comment-form" action="/stories/{{ post.slug }}/comments" method="post">
+      {{ token(csrf) }}{{ trap() }}
+      {% if sent %}<p class="notice" role="status">Thanks. Your comment is awaiting approval.</p>{% endif %}
+      {% if error %}<p class="notice" role="alert">{{ error }}</p>{% endif %}
+      <label class="field">Name <input name="name" value="{{ submitted.get('name', '') }}" autocomplete="name" maxlength="60" required></label>
+      <label class="field">Comment <textarea name="body" rows="4" maxlength="1500" required>{{ submitted.get('body', '') }}</textarea></label>
+      <button class="button button-light" type="submit">Post comment <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}

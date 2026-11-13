@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "parts.html" import token %}
+{% block content %}
+<section class="shell narrow-page">
+  <p class="eyebrow">Silvergrain Studio</p>
+  <h1>Sign in</h1>
+  <form class="form login-form" method="post" action="/admin/sign-in">
+    {{ token(csrf) }}
+    {% if error %}<p class="notice" role="alert">{{ error }}</p>{% endif %}
+    {% if not admin_exists %}<p class="notice">The owner can create an admin account using the setup steps in the project README.</p>{% endif %}
+    <label class="field">Username <input name="username" autocomplete="username" maxlength="60" required></label>
+    <label class="field">Password <input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+    <button class="button button-light" type="submit">Sign in <span aria-hidden="true">↗</span></button>
+  </form>
+</section>
+{% endblock %}
