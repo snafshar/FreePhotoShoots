@@ -28,6 +28,7 @@ export type Card = Story & { photo?: Photo; photo_count: number };
 export type Comment = {
   id: number;
   post_id: string;
+  photo_id: string | null;
   name: string;
   body: string;
   status: "pending" | "approved";

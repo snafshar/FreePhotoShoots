@@ -15,6 +15,13 @@
       "when": 1794585137975,
       "tag": "0001_photo_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794835294836,
+      "tag": "0002_photo_comment_threads",
+      "breakpoints": true
     }
   ]
 }

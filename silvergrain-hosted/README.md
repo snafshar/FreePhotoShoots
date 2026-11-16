@@ -2,12 +2,12 @@
 
 [Open Silvergrain](https://silvergrain.afsharsn.chatgpt.site). Sign in with the ChatGPT account that owns the site, then choose **Studio** in the header. The site opens with four labeled sample stories and is initially owner-only.
 
-- **Stories** creates drafts and publishes multi-photo galleries. Add a caption, story text, location, and date as needed. Visitors can use touch swipes, arrows, or the keyboard.
-- **Comments** approves, hides, or deletes submissions.
+- **Stories** creates drafts and publishes multi-photo galleries. Add a story intro, location, and date as needed. Give each photograph its own caption. Every photo has a stable page and discussion, with touch swipes, arrows, and keyboard navigation between photographs.
+- **Comments** shows which photograph each submission is about. The owner can approve, hide, or delete submissions. Earlier story-level comments remain in the story discussion.
 - **Inbox** keeps contact form messages and a reply-by-email link.
 - **Settings** controls the name, public email and phone, and whether to show the sample stories.
 
-The editor accepts up to ten JPEG, PNG, or WebP photos per story. It makes two WebP copies in the browser, with maximum long edges of 1,920 and 720 pixels, and leaves camera metadata out. The first photo is the cover. The full-screen gallery shows the display copy and preserves its colors.
+The editor accepts up to ten JPEG, PNG, or WebP photos per story. It makes two WebP copies in the browser, with maximum long edges of 1,920 and 720 pixels, and leaves camera metadata out. The first photo is the cover. The magazine and full-screen gallery display all photographs in black and white.
 
 ## Source and deployment
 
@@ -35,7 +35,7 @@ node --test tests/worker.test.mjs
 npm run build
 ```
 
-The integration suite uses a disposable local D1 and R2. It exercises guest and owner access, draft photo privacy, publishing and reordering, moderated comments, contact verification, and inbox delivery.
+The integration suite uses a disposable local D1 and R2. It exercises guest and owner access, draft photo privacy, publishing and reordering, independent photo discussions, comment moderation, contact verification, and inbox delivery.
 
 For a browser preview, copy `.dev.vars.example` to `.dev.vars` and set a development signing key. After building, apply each migration to your local database once:
 

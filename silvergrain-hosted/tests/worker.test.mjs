@@ -74,7 +74,9 @@ after(async () => runtime?.dispose());
 
 test("public journal, signed-in owner, and dashboard boundary", async () => {
   const homepage = await request("/");
-  assert.match(await homepage.text(), /Where the<br><em>light falls/);
+  const cover = await homepage.text();
+  assert.match(cover, /<h1>Silvergrain<\/h1>/);
+  assert.match(cover, /Where the<br><em>light falls/);
   const journal = await request("/journal?category=Architecture");
   const filtered = await journal.text();
   assert.match(filtered, /Between the arches/);
@@ -124,32 +126,83 @@ test("two photos stay private in a draft, then publish, reorder, unpublish, and 
   const publicStory = await request(story);
   const storyHtml = await publicStory.text();
   assert.equal(publicStory.status, 200, storyHtml);
-  assert.ok(storyHtml.indexOf('alt="Second frame"') < storyHtml.indexOf('alt="First frame"'));
+  assert.match(storyHtml, /alt="Second frame"/);
+  assert.doesNotMatch(storyHtml, /alt="First frame"/);
+  assert.ok(storyHtml.includes(`${story}/photos/${left}#photograph`));
+  const firstPhoto = await page(`${story}/photos/${left}`);
+  assert.match(firstPhoto.text, /<figcaption>First frame<\/figcaption>/);
+  assert.doesNotMatch(firstPhoto.text, /alt="Second frame"/);
+  assert.equal((await request(`${story}/photos/dolomites`)).status, 404);
+
+  const photoComment = await submit(`${story}/photos/${left}/comments`, firstPhoto, { name: "Reader", body: "View from the first frame" });
+  assert.equal(photoComment.headers.get("Location"), `${story}/photos/${left}?comment=sent#comments`);
+  const item = await db.prepare("SELECT post_id, photo_id FROM comments WHERE body = ?").bind("View from the first frame").first();
+  assert.deepEqual(item, { post_id: id, photo_id: left });
   assert.match(storyHtml, /Second paragraph/);
   assert.equal((await request(cover)).status, 200);
+
   edit = await page(editPath, owner);
   revision = field(edit.text, "revision");
-  assert.equal((await submit(editPath, edit, { ...publish, intent: "draft", revision }, { order })).status, 303);
+  const remove = { ...publish, intent: "save", revision, remove_photo: left };
+  assert.equal((await submit(editPath, edit, remove, { order })).status, 303);
+  assert.equal((await request(`${story}/photos/${left}`)).status, 404);
+  assert.equal(await db.prepare("SELECT 1 FROM comments WHERE photo_id = ?").bind(left).first(), null);
+  assert.equal((await request(cover)).status, 200);
+
+  edit = await page(editPath, owner);
+  revision = field(edit.text, "revision");
+  assert.equal((await submit(editPath, edit, { ...publish, intent: "draft", revision }, { order: [right] })).status, 303);
   assert.equal((await request(story)).status, 404);
+  assert.equal((await request(`${story}/photos/${left}`)).status, 404);
+  assert.equal((await submit(`${story}/photos/${right}/comments`, firstPhoto, { name: "Reader", body: "Hidden photo" })).status, 404);
   assert.equal((await request(cover)).status, 404);
   edit = await page(editPath, owner);
   assert.equal((await submit(`${editPath}/action`, edit, {
     revision: field(edit.text, "revision"), action: "delete", confirm: "yes",
   })).status, 303);
   assert.equal((await request(story, { headers: owner })).status, 404);
+  assert.equal(await db.prepare("SELECT 1 from comments WHERE post_id = ?").bind(id).first(), null);
 });
 
-test("comments need approval and the contact form delivers messages once", async () => {
+test("a multi-photo story has separate moderated threads and retains earlier comments", async () => {
   const path = "/stories/where-the-light-falls";
-  const reader = await page(path);
-  const comment = "Silver light on the ridgeline.";
-  assert.equal((await submit(`${path}/comments`, reader, { name: "A reader", body: comment })).status, 303);
-  assert.doesNotMatch(await (await request(path)).text(), /Silver light on the ridgeline/);
+  const first = `${path}/photos/dolomites`;
+  const second = `${path}/photos/alpine-lake`;
+  const firstPage = await page(first);
+  const secondPage = await page(second);
+  assert.match(firstPage.text, /<figcaption>The ridgeline before sunrise\.<\/figcaption>/);
+  assert.match(secondPage.text, /<figcaption>The still water at first light\.<\/figcaption>/);
+  assert.equal((secondPage.text.match(/<figcaption>/g) ?? []).length, 1);
+  assert.ok(secondPage.text.includes(`action="${second}/comments#comments"`));
+
+  const comment = "Silver light on the lake.";
+  const sent = await submit(`${second}/comments`, secondPage, { name: "A reader", body: comment });
+  assert.equal(sent.status, 303);
+  assert.equal(sent.headers.get("Location"), `${second}?comment=sent#comments`);
+  assert.equal((await submit(`${path}/photos/coast/comments`, secondPage, { name: "A reader", body: "Wrong story" })).status, 404);
+  assert.doesNotMatch((await page(second)).text, /Silver light on the lake/);
   const moderation = await page("/admin/comments", owner);
+  assert.ok(moderation.text.includes(`${second}#comments`));
+  assert.match(moderation.text, /Where the light falls · Photo 2/);
   const action = moderation.text.match(/\/admin\/comments\/\d+\/action/)[0];
   assert.equal((await submit(action, moderation, { action: "approve" })).status, 303);
-  assert.match(await (await request(path)).text(), /Silver light on the ridgeline/);
+  assert.match((await page(second)).text, /Silver light on the lake/);
+  assert.doesNotMatch((await page(first)).text, /Silver light on the lake/);
+  assert.doesNotMatch((await page(path)).text, /Silver light on the lake/);
 
+  await db.prepare(`INSERT INTO comments (post_id, name, body, status, created_at)
+    VALUES ('sample-where-the-light-falls', 'Earlier reader', 'The original story discussion.', 'approved', 1760000000)`).run();
+  const article = await page(second);
+  assert.match(article.text, /View earlier story discussion/);
+  assert.doesNotMatch(article.text, /The original story discussion/);
+  const legacy = await request(`${path}?discussion=story`);
+  assert.equal(legacy.status, 200);
+  const archived = await legacy.text();
+  assert.match(archived, /The original story discussion/);
+  assert.doesNotMatch(archived, /Silver light on the lake|Post comment/);
+});
+
+test("the contact form delivers messages once", async () => {
   const contact = await page("/contact");
   const [, a, b] = contact.text.match(/What is (\d+) \+ (\d+)\?/);
   const fields = {

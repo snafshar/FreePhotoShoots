@@ -1,4 +1,4 @@
-import { categories, maxPhotos, photoUrl } from "../data";
+import { categories, maxPhotos, photoPageUrl, photoUrl, storyDiscussionUrl } from "../data";
 import type { dashboard } from "../data";
 import type { Photo, Settings, Story, StoryInput } from "../types";
 import { arrow, dateLabel, emailLink, escape as e, hidden, notice } from "./layout";
@@ -51,9 +51,13 @@ export function dashboardView(
   } else if (section === "comments") {
     content = `<section class="dashboard-content">
       <div class="section-heading"><h2>Comments</h2><span class="muted">${stats.pending} pending</span></div>
-      ${comments.length ? comments.map((item) => `<article class="inbox-item">
+      ${comments.length ? comments.map((item) => {
+        const href = item.photo_id ? photoPageUrl(item.slug, item.photo_id) : storyDiscussionUrl(item.slug);
+        const subject = item.position !== null ? `Photo ${item.position + 1}` : "Story discussion";
+        return `<article class="inbox-item">
         <div class="entry-meta"><strong>${e(item.name)}</strong><time>${dateLabel(item.created_at)}</time></div>
-        ${item.slug ? `<a class="small-link" href="/stories/${item.slug}#comments">${e(item.title)} ↗</a>` : ""}
+        ${item.slug ? `<a class="small-link" href="${href}#comments">${e(item.title)} · ${subject} ↗</a>` : ""}
+        ${item.photo_caption ? `<p class="muted moderation-caption">${e(item.photo_caption)}</p>` : ""}
         <p class="prose">${e(item.body)}</p>
         <div class="item-actions"><span class="entry-state">${e(item.status)}</span>
           <form method="post" action="/admin/comments/${item.id}/action">
@@ -62,7 +66,8 @@ export function dashboardView(
             <button class="button compact" name="action" value="delete">Delete</button>
           </form>
         </div>
-      </article>`).join("") : '<p class="empty">Comments submitted to your stories will appear here.</p>'}
+      </article>`;
+      }).join("") : '<p class="empty">Comments on your photographs will appear here.</p>'}
     </section>`;
   } else if (section === "inbox") {
     content = `<section class="dashboard-content">
@@ -129,7 +134,7 @@ export function editorView(input: Editor) {
       <div class="editor-grid">
         <section class="form editor-panel" aria-label="Story details">
           <label class="field">Title <input name="title" value="${e(values.title)}" maxlength="100" required></label>
-          <label class="field">Caption <textarea name="caption" rows="2" maxlength="300">${e(values.caption)}</textarea></label>
+          <label class="field">Story intro <textarea name="caption" rows="2" maxlength="300">${e(values.caption)}</textarea></label>
           <div class="field-row">
             <label class="field">Category <select name="category">${categories.map((name) => `<option${name === values.category ? " selected" : ""}>${name}</option>`).join("")}</select></label>
             <label class="field">Photo date <input type="date" name="photo_date" value="${e(values.photo_date)}"></label>

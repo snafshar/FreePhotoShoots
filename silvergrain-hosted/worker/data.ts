@@ -30,6 +30,14 @@ export function photoUrl(photo: Photo, small = false) {
   return (small ? photo.small : photo.full) ?? `/media/${photo.id}${small ? "/small" : ""}`;
 }
 
+export function photoPageUrl(slug: string, photoId: string) {
+  return `/stories/${encodeURIComponent(slug)}/photos/${encodeURIComponent(photoId)}`;
+}
+
+export function storyDiscussionUrl(slug: string) {
+  return `/stories/${encodeURIComponent(slug)}?discussion=story`;
+}
+
 export async function settings(db: D1Database): Promise<Settings> {
   const { results } = await db.prepare("SELECT key, value FROM settings WHERE key IN ('name','email','phone','hide_samples')")
     .all<{ key: string; value: string }>();
@@ -96,26 +104,49 @@ export async function neighbors(db: D1Database, post: Story, site: Settings): Pr
   return [newer.results[0] ?? null, older.results[0] ?? visibleSamples[0] ?? null];
 }
 
-export async function approvedComments(db: D1Database, id: string, page: number) {
+export async function approvedComments(db: D1Database, id: string, photoId: string | null, page: number) {
   const pageSize = 25;
   const [count, comments] = await db.batch([
-    db.prepare("SELECT count(*) AS total FROM comments WHERE post_id = ? AND status = 'approved'").bind(id),
-    db.prepare(`SELECT * FROM comments WHERE post_id = ? AND status = 'approved'
-      ORDER BY id DESC LIMIT ? OFFSET ?`).bind(id, pageSize, (page - 1) * pageSize),
+    db.prepare("SELECT count(*) AS total FROM comments WHERE post_id = ? AND photo_id IS ? AND status = 'approved'")
+      .bind(id, photoId),
+    db.prepare(`SELECT * FROM comments WHERE post_id = ? AND photo_id IS ? AND status = 'approved'
+      ORDER BY id DESC LIMIT ? OFFSET ?`).bind(id, photoId, pageSize, (page - 1) * pageSize),
   ]);
   const total = Number((count.results[0] as { total: number }).total);
   return { total, comments: comments.results as Comment[], pages: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
-export async function addComment(db: D1Database, post: Story, name: string, body: string) {
+export async function hasStoryDiscussion(db: D1Database, id: string) {
+  return (await db.prepare(`SELECT 1 FROM comments
+    WHERE post_id = ? AND photo_id IS NULL AND status = 'approved' LIMIT 1`).bind(id).first()) !== null;
+}
+
+export async function addComment(db: D1Database, post: Story, photoId: string, name: string, body: string) {
   const now = seconds();
-  const query = post.demo
-    ? db.prepare(`INSERT INTO comments (post_id, name, body, created_at) SELECT ?, ?, ?, ?
+  const statement = post.demo
+    ? db.prepare(`INSERT INTO comments (post_id, photo_id, name, body, created_at) SELECT ?, ?, ?, ?, ?
         WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'hide_samples' AND value = '1')`)
-    : db.prepare(`INSERT INTO comments (post_id, name, body, created_at) SELECT id, ?, ?, ?
-        FROM posts WHERE id = ? AND published_at IS NOT NULL`);
-  const result = await (post.demo ? query.bind(post.id, name, body, now) : query.bind(name, body, now, post.id)).run();
-  if (result.meta.changes !== 1) throw new HttpError(404, "This story is unavailable.");
+      .bind(post.id, photoId, name, body, now)
+    : db.prepare(`INSERT INTO comments (post_id, photo_id, name, body, created_at)
+        SELECT p.id, f.id, ?, ?, ? FROM posts AS p JOIN photos AS f ON f.post_id = p.id
+        WHERE p.id = ? AND f.id = ? AND p.published_at IS NOT NULL`)
+      .bind(name, body, now, post.id, photoId);
+  if ((await statement.run()).meta.changes !== 1) throw new HttpError(404, "This photograph is unavailable.");
+}
+
+type ModerationRow = Comment & {
+  slug: string | null; title: string | null; position: number | null; photo_caption: string | null;
+};
+
+function moderationEntry(item: ModerationRow) {
+  const sample = item.post_id.startsWith(SAMPLE_ID_PREFIX)
+    ? sampleBySlug.get(item.post_id.slice(SAMPLE_ID_PREFIX.length)) : undefined;
+  const samplePosition = sample?.photos.findIndex((photo) => photo.id === item.photo_id) ?? -1;
+  const position = item.position ?? (samplePosition >= 0 ? samplePosition : null);
+  return {
+    ...item, position, slug: item.slug ?? sample?.slug ?? "", title: item.title ?? sample?.title ?? "",
+    photo_caption: item.photo_caption ?? (samplePosition >= 0 ? sample!.photos[samplePosition].caption : ""),
+  };
 }
 
 export async function dashboard(db: D1Database, section: string, view: string, site: Settings) {
@@ -129,7 +160,9 @@ export async function dashboard(db: D1Database, section: string, view: string, s
     const condition = view === "published" ? "WHERE p.published_at IS NOT NULL" : view === "draft" ? "WHERE p.published_at IS NULL" : "";
     queries.push(db.prepare(`${coverSQL} ${condition} ORDER BY p.updated_at DESC, p.id DESC`));
   } else if (section === "comments") {
-    queries.push(db.prepare(`SELECT c.*, p.slug, p.title FROM comments AS c LEFT JOIN posts AS p ON p.id = c.post_id
+    queries.push(db.prepare(`SELECT c.*, p.slug, p.title, f.position, f.caption AS photo_caption
+      FROM comments AS c LEFT JOIN posts AS p ON p.id = c.post_id
+      LEFT JOIN photos AS f ON f.id = c.photo_id AND f.post_id = c.post_id
       ORDER BY (c.status = 'pending') DESC, c.id DESC`));
   } else if (section === "inbox") {
     queries.push(db.prepare("SELECT * FROM messages ORDER BY id DESC"));
@@ -142,10 +175,7 @@ export async function dashboard(db: D1Database, section: string, view: string, s
     cards: section === "stories" ? [
       ...(results.results as CardRow[]).map(card), ...(view === "draft" ? [] : shownSamples),
     ] : [],
-    comments: section === "comments" ? (results.results as (Comment & { slug: string | null; title: string | null })[]).map((item) => {
-      const sample = sampleBySlug.get(item.post_id.replace(SAMPLE_ID_PREFIX, ""));
-      return { ...item, slug: item.slug ?? sample?.slug ?? "", title: item.title ?? sample?.title ?? "Sample story" };
-    }) : [],
+    comments: section === "comments" ? (results.results as ModerationRow[]).map(moderationEntry) : [],
     messages: section === "inbox" ? results.results as import("./types").Message[] : [],
   };
 }
@@ -215,8 +245,12 @@ export async function saveStory(
       .bind(id, slugFor(values.title, id), ...fields, key, ...pendingArgs);
   const scope = "EXISTS (SELECT 1 FROM posts WHERE id = ? AND write_token = ?)";
   const removed = originals.filter((photo) => !retained.has(photo.id)).map((photo) => photo.id);
-  const statements = [
-    start,
+  const statements = [start];
+  if (removed.length) {
+    statements.push(db.prepare(`DELETE FROM comments WHERE post_id = ? AND photo_id IN
+      (${removed.map(() => "?").join(",")}) AND ${scope}`).bind(id, ...removed, id, key));
+  }
+  statements.push(
     ...removed.map((photoId) => db.prepare(`DELETE FROM photos WHERE id = ? AND post_id = ? AND ${scope}`).bind(photoId, id, id, key)),
     ...edits.map((photo, position) => {
       if (!photo.isNew) return db.prepare(`UPDATE photos SET position=?, alt=?, caption=? WHERE id=? AND post_id=? AND ${scope}`)
@@ -226,7 +260,7 @@ export async function saveStory(
         SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${scope}`).bind(photo.id, id, position, photo.alt, photo.caption, upload.width, upload.height, id, key);
     }),
     ...newIds.map((photoId) => db.prepare(`DELETE FROM uploads WHERE id = ? AND ${scope}`).bind(photoId, id, key)),
-  ];
+  );
   const [result] = await db.batch(statements);
   if (result.meta.changes !== 1) throw new HttpError(409, "This story changed or an upload expired. Reload before saving.");
   return removed;

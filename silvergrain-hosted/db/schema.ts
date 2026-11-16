@@ -44,11 +44,15 @@ export const uploads = sqliteTable("uploads", {
 export const comments = sqliteTable("comments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   postId: text("post_id").notNull(),
+  photoId: text("photo_id"),
   name: text("name").notNull(),
   body: text("body").notNull(),
   status: text("status", { enum: ["pending", "approved"] }).notNull().default("pending"),
   createdAt: integer("created_at").notNull(),
-}, (comment) => [index("comments_post").on(comment.postId, comment.status, comment.id)]);
+}, (comment) => [
+  index("comments_post").on(comment.postId, comment.status, comment.id),
+  index("comments_photo").on(comment.postId, comment.photoId, comment.status, comment.id),
+]);
 
 export const messages = sqliteTable("messages", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -62,13 +62,18 @@ for (const slider of document.querySelectorAll("[data-slider]")) {
 }
 
 for (const page of document.querySelectorAll("[data-paged]")) {
+  const owned = (element) => element.closest("[data-paged]") === page;
   const go = (step) => {
-    const link = page.querySelector(step === 1 ? "[data-page-next]" : "[data-page-prev]");
+    const selector = step === 1 ? "[data-page-next]" : "[data-page-prev]";
+    const link = [...page.querySelectorAll(selector)].find(owned);
     if (link) window.location.assign(link.href);
   };
-  page.querySelectorAll("[data-page-touch]").forEach((area) => onSwipe(area, go));
+  page.querySelectorAll("[data-page-touch]").forEach((area) => {
+    if (owned(area)) onSwipe(area, go);
+  });
   page.addEventListener("keydown", (event) => {
-    if (!event.target.closest(".pager, .story-nav")) return;
+    if (!owned(event.target) || event.target.closest("dialog")) return;
+    if (event.target !== page && !event.target.closest(".pager, .story-nav, .photo-navigation, .photo-open")) return;
     const step = arrowStep(event);
     if (step) {
       event.preventDefault();

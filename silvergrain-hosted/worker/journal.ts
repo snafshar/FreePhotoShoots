@@ -1,6 +1,6 @@
 import {
-  addComment, approvedComments, categories, dashboard, deleteStory, maxPhotos, neighbors, pendingFor, photoKeys,
-  photosFor, publishedCards, readStory, saveStory, setSettings, settings, storyIdPattern,
+  addComment, approvedComments, categories, dashboard, deleteStory, hasStoryDiscussion, maxPhotos, neighbors,
+  pendingFor, photoKeys, photoPageUrl, photosFor, publishedCards, readStory, saveStory, setSettings, settings, storyIdPattern,
 } from "./data";
 import type { EditPhoto, SavePhoto } from "./data";
 import {
@@ -54,40 +54,55 @@ function errorPage(state: State, error: HttpError) {
 const notFound = (message = "This page is unavailable.") => new HttpError(404, message);
 const isFormError = (error: unknown): error is HttpError => error instanceof HttpError && error.status === 400;
 
-async function storyPage(state: State, slug: string, issue?: HttpError, form?: URLSearchParams) {
-  const result = await readStory(state.env.DB, state.site, slug, state.identity.admin);
+async function storyPage(state: State, slug: string, photoId?: string, issue?: HttpError, form?: URLSearchParams) {
+  const { env, site, identity } = state;
+  const result = await readStory(env.DB, site, slug, identity.admin);
   if (!result) throw notFound("This story is unavailable.");
   const { post, photos } = result;
+  const index = photoId ? photos.findIndex((photo) => photo.id === photoId) : 0;
+  if (index < 0) throw notFound("This photograph is unavailable.");
+  const photo = photos[index];
+  const legacy = !photoId && state.url.searchParams.get("discussion") === "story";
+  const publicStory = post.published_at !== null;
   const pageString = state.url.searchParams.get("comments") ?? "1";
   if (!/^[1-9][0-9]{0,6}$/.test(pageString)) throw notFound("This comments page does not exist.");
   const page = Number(pageString);
-  const [adjacent, feedback, csrf] = await Promise.all([
-    neighbors(state.env.DB, post, state.site), approvedComments(state.env.DB, post.id, page),
-    post.published_at !== null ? formToken(state.request, state.env, state.identity) : { token: "", cookie: "" },
+  const [adjacent, feedback, hasLegacy, csrf] = await Promise.all([
+    neighbors(env.DB, post, site),
+    publicStory && (photo || legacy)
+      ? approvedComments(env.DB, post.id, legacy ? null : photo.id, page)
+      : { comments: [], total: 0, pages: 1 },
+    publicStory && !legacy ? hasStoryDiscussion(env.DB, post.id) : false,
+    publicStory && photo && !legacy ? formToken(state.request, env, identity) : { token: "", cookie: "" },
   ]);
   if (page > feedback.pages) throw notFound("This comments page does not exist.");
   return html(state, post.title, "journal", storyView({
-    post, photos, adjacent, comments: feedback.comments, commentCount: feedback.total, page,
-    pages: feedback.pages, csrf: csrf.token, sent: state.url.searchParams.get("comment") === "sent", error: issue?.message, form,
+    post, photos, index, adjacent, comments: feedback.comments, commentCount: feedback.total, page,
+    pages: feedback.pages, csrf: csrf.token, legacy, hasLegacy,
+    sent: state.url.searchParams.get("comment") === "sent", error: issue?.message, form,
   }), { cookie: csrf.cookie, status: issue?.status });
 }
 
-async function postComment(state: State, slug: string) {
+async function postComment(state: State, slug: string, photoId?: string) {
   const { request, env, site, identity } = state;
-  const post = (await readStory(env.DB, site, slug, false))?.post;
-  if (!post) throw notFound("This story is unavailable.");
+  const result = await readStory(env.DB, site, slug, false);
+  if (!result) throw notFound("This story is unavailable.");
+  const { post, photos } = result;
+  const photo = photoId ? photos.find((entry) => entry.id === photoId) : photos[0];
+  if (!photo) throw notFound("This photograph is unavailable.");
   const form = await readForm(request, env, identity);
+  const confirmation = `${photoPageUrl(slug, photo.id)}?comment=sent#comments`;
   await rateLimit(request, env, "comment", 8);
-  if (form.get("company")) return redirect(`/stories/${slug}?comment=sent#comments`);
+  if (form.get("company")) return redirect(confirmation);
   try {
     const name = field(form, "name", 60), body = field(form, "body", 1500, "comment");
     if (!name || !body) throw new HttpError(400, "Enter your name and comment.");
-    await addComment(env.DB, post, name, body);
+    await addComment(env.DB, post, photo.id, name, body);
   } catch (error) {
-    if (isFormError(error)) return storyPage(state, slug, error, form);
+    if (isFormError(error)) return storyPage(state, slug, photo.id, error, form);
     throw error;
   }
-  return redirect(`/stories/${slug}?comment=sent#comments`);
+  return redirect(confirmation);
 }
 
 async function contact(state: State, issue?: HttpError, form?: URLSearchParams) {
@@ -326,9 +341,9 @@ export async function fetchJournal(request: Request, env: Bindings, ctx: Executi
       return html(state, "Journal", "journal", archive(cards, used, category, n, pageCount));
     }
     if (path === "/contact") return get ? await contact(state) : await sendMessage(state);
-    const story = path.match(/^\/stories\/([a-z0-9-]{1,90})(\/comments)?$/);
-    if (story && get && !story[2]) return await storyPage(state, story[1]);
-    if (story && !get && story[2]) return await postComment(state, story[1]);
+    const story = path.match(/^\/stories\/([a-z0-9-]{1,90})(?:\/photos\/([a-z0-9-]{1,64}))?(\/comments)?$/);
+    if (story && get && !story[3]) return await storyPage(state, story[1], story[2]);
+    if (story && !get && story[3]) return await postComment(state, story[1], story[2]);
     throw notFound();
   } catch (error) {
     if (error instanceof HttpError) return errorPage(state, error);

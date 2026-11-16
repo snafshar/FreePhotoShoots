@@ -18,7 +18,7 @@ export const notice = (message: string, error = false) => message
 type Active = "home" | "journal" | "contact" | "admin" | "";
 const links = [["home", "/", "Home"], ["journal", "/journal", "Journal"], ["contact", "/contact", "Contact"]];
 export const arrow = '<span aria-hidden="true">↗</span>';
-const brand = '<a class="brand" href="/" aria-label="Silvergrain home"><span class="brand-mark" aria-hidden="true"></span>Silvergrain</a>';
+const brand = '<a class="brand" href="/" aria-label="Silvergrain home"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word">Silvergrain</span></a>';
 
 export function layout(site: Settings, title: string, active: Active, admin: boolean, content: string, head = "") {
   return `<!doctype html>
@@ -26,8 +26,8 @@ export function layout(site: Settings, title: string, active: Active, admin: boo
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Silvergrain, a black-and-white photography journal by ${escape(site.name)}.">
-  <meta name="theme-color" content="#141414">
+  <meta name="description" content="Silvergrain, a black-and-white photography magazine by ${escape(site.name)}.">
+  <meta name="theme-color" content="#ffffff">
   <title>${title ? escape(title) + " · " : ""}Silvergrain</title>
   <link rel="icon" href="/static/favicon.png" type="image/png">
   <link rel="preload" href="/static/fonts/InstrumentSerif-Regular.woff2" as="font" type="font/woff2" crossorigin>
@@ -37,7 +37,7 @@ export function layout(site: Settings, title: string, active: Active, admin: boo
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
-  <header class="site-header">
+  <header class="site-header${active === "home" ? " cover-header" : ""}">
     <div class="shell header-inner">
       ${brand}
       <nav class="site-nav" aria-label="Main navigation">
