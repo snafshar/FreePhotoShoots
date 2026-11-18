@@ -1,6 +1,6 @@
 import {
-  addComment, approvedComments, categories, dashboard, deleteStory, hasStoryDiscussion, maxPhotos, neighbors,
-  pendingFor, photoKeys, photoPageUrl, photosFor, publishedCards, readStory, saveStory, setSettings, settings, storyIdPattern,
+  categories, dashboard, deleteStory, magazineCatalogue, magazinePage, maxPhotos, pendingFor, photoKeys,
+  photosFor, readStory, savePhotoOrder, saveStory, setSettings, settings, storyIdPattern,
 } from "./data";
 import type { EditPhoto, SavePhoto } from "./data";
 import {
@@ -8,15 +8,15 @@ import {
   validEmail, validPhone, verifyChallenge, rateLimit,
 } from "./security";
 import type { Identity } from "./security";
-import type { Bindings, Settings, Story, StoryInput } from "./types";
+import type { Bindings, MagazinePhoto, Settings, Story, StoryInput } from "./types";
 import { media, pendingMedia, uploadPhoto } from "./uploads";
-import { dashboardView, editorView, signIn } from "./views/admin";
+import { dashboardView, editorView, orderView, signIn } from "./views/admin";
 import { escape, layout } from "./views/layout";
-import { archive, contactView, home, storyView } from "./views/public";
+import { contactView, magazineView, storyView } from "./views/public";
 
 type Active = "home" | "journal" | "contact" | "admin" | "";
 type State = { request: Request; env: Bindings; identity: Identity; site: Settings; url: URL };
-const pages = { stories: "Story saved.", deleted: "Story deleted.", moderated: "Comment updated.", read: "Message updated.", settings: "Contact details saved." };
+const pages = { stories: "Story saved.", deleted: "Story deleted.", read: "Message updated.", settings: "Contact details saved.", order: "Photo order saved." };
 const originalCsp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'";
 const fallbackSite = { name: "Sina Afshar", email: "", phone: "", hide_samples: "0" };
 
@@ -54,55 +54,54 @@ function errorPage(state: State, error: HttpError) {
 const notFound = (message = "This page is unavailable.") => new HttpError(404, message);
 const isFormError = (error: unknown): error is HttpError => error instanceof HttpError && error.status === 400;
 
-async function storyPage(state: State, slug: string, photoId?: string, issue?: HttpError, form?: URLSearchParams) {
+async function storyPage(state: State, slug: string, photoId?: string) {
   const { env, site, identity } = state;
   const result = await readStory(env.DB, site, slug, identity.admin);
   if (!result) throw notFound("This story is unavailable.");
   const { post, photos } = result;
-  const index = photoId ? photos.findIndex((photo) => photo.id === photoId) : 0;
-  if (index < 0) throw notFound("This photograph is unavailable.");
-  const photo = photos[index];
-  const legacy = !photoId && state.url.searchParams.get("discussion") === "story";
-  const publicStory = post.published_at !== null;
-  const pageString = state.url.searchParams.get("comments") ?? "1";
-  if (!/^[1-9][0-9]{0,6}$/.test(pageString)) throw notFound("This comments page does not exist.");
-  const page = Number(pageString);
-  const [adjacent, feedback, hasLegacy, csrf] = await Promise.all([
-    neighbors(env.DB, post, site),
-    publicStory && (photo || legacy)
-      ? approvedComments(env.DB, post.id, legacy ? null : photo.id, page)
-      : { comments: [], total: 0, pages: 1 },
-    publicStory && !legacy ? hasStoryDiscussion(env.DB, post.id) : false,
-    publicStory && photo && !legacy ? formToken(state.request, env, identity) : { token: "", cookie: "" },
-  ]);
-  if (page > feedback.pages) throw notFound("This comments page does not exist.");
-  return html(state, post.title, "journal", storyView({
-    post, photos, index, adjacent, comments: feedback.comments, commentCount: feedback.total, page,
-    pages: feedback.pages, csrf: csrf.token, legacy, hasLegacy,
-    sent: state.url.searchParams.get("comment") === "sent", error: issue?.message, form,
-  }), { cookie: csrf.cookie, status: issue?.status });
+  const photo = photoId ? photos.find((photo) => photo.id === photoId) : photos[0];
+  if (photoId && !photo) throw notFound("This photograph is unavailable.");
+  const entry: MagazinePhoto | undefined = photo ? {
+    ...photo, post_id: post.id, slug, title: photo.title || post.title, story: photo.story ?? post.story,
+    category: post.category, location: post.location, photo_date: post.photo_date, demo: post.demo,
+  } : undefined;
+  const sequence = post.published_at !== null ? (await magazineCatalogue(env.DB, site)).entries : photos.map((photo) => ({
+    ...photo, post_id: post.id, slug, title: photo.title || post.title,
+    category: post.category, location: post.location, photo_date: post.photo_date,
+  }));
+  const index = photo ? sequence.findIndex((item) => item.id === photo.id) : -1;
+  const adjacent = index < 0 ? [null, null] : [sequence[index - 1] ?? null, sequence[index + 1] ?? null];
+  return html(state, entry?.title || post.title, "journal", storyView(
+    post, entry, adjacent as [MagazinePhoto | null, MagazinePhoto | null],
+  ));
 }
 
-async function postComment(state: State, slug: string, photoId?: string) {
-  const { request, env, site, identity } = state;
-  const result = await readStory(env.DB, site, slug, false);
-  if (!result) throw notFound("This story is unavailable.");
-  const { post, photos } = result;
-  const photo = photoId ? photos.find((entry) => entry.id === photoId) : photos[0];
-  if (!photo) throw notFound("This photograph is unavailable.");
-  const form = await readForm(request, env, identity);
-  const confirmation = `${photoPageUrl(slug, photo.id)}?comment=sent#comments`;
-  await rateLimit(request, env, "comment", 8);
-  if (form.get("company")) return redirect(confirmation);
+async function magazine(state: State, page: number, journal: boolean) {
+  const category = state.url.searchParams.get("category") ?? "";
+  if (category && !categories.includes(category)) throw notFound("This category does not exist.");
+  const { photos, pageCount, used } = await magazinePage(state.env.DB, state.site, category, page);
+  return html(state, journal ? "Journal" : "", journal ? "journal" : "home", magazineView({
+    photos, site: state.site, page, pageCount, categories: used, category, journal,
+  }));
+}
+
+async function photoOrderPage(state: State, issue?: HttpError) {
+  const { entries, order } = await magazineCatalogue(state.env.DB, state.site);
+  const csrf = await formToken(state.request, state.env, state.identity);
+  const message = state.url.searchParams.get("saved") === "order" ? "Photo order saved." : "";
+  return html(state, "Photo order", "admin", orderView(entries, order.revision, csrf.token, message, issue?.message),
+    { cookie: csrf.cookie, status: issue?.status });
+}
+
+async function changePhotoOrder(state: State) {
+  const form = await readForm(state.request, state.env, state.identity, 2 * 1024 * 1024);
   try {
-    const name = field(form, "name", 60), body = field(form, "body", 1500, "comment");
-    if (!name || !body) throw new HttpError(400, "Enter your name and comment.");
-    await addComment(env.DB, post, photo.id, name, body);
-  } catch (error) {
-    if (isFormError(error)) return storyPage(state, slug, photo.id, error, form);
-    throw error;
+    await savePhotoOrder(state.env.DB, state.site, form);
+  } catch (issue) {
+    if (isFormError(issue) || (issue instanceof HttpError && issue.status === 409)) return photoOrderPage(state, issue);
+    throw issue;
   }
-  return redirect(confirmation);
+  return redirect("/admin/order?saved=order");
 }
 
 async function contact(state: State, issue?: HttpError, form?: URLSearchParams) {
@@ -171,10 +170,15 @@ function queuedPhotos(form: URLSearchParams): EditPhoto[] {
   if (!Array.isArray(parsed) || parsed.length > maxPhotos) throw new HttpError(400, "Select up to ten photographs.");
   return parsed.map((photo) => {
     if (!photo || typeof photo.id !== "string" || !storyIdPattern.test(photo.id) ||
-      typeof photo.alt !== "string" || photo.alt.length > 200 || typeof photo.caption !== "string" || photo.caption.length > 300) {
+      typeof photo.alt !== "string" || photo.alt.length > 200 || typeof photo.caption !== "string" || photo.caption.length > 300 ||
+      (photo.title != null && (typeof photo.title !== "string" || photo.title.length > 100)) ||
+      (photo.story != null && (typeof photo.story !== "string" || photo.story.length > 12000))) {
       throw new HttpError(400, "Use up to 200 characters for alt text and 300 for photo captions.");
     }
-    return { id: photo.id, alt: photo.alt.trim(), caption: photo.caption.trim() };
+    return {
+      id: photo.id, alt: photo.alt.trim(), caption: photo.caption.trim(),
+      title: photo.title?.trim() ?? null, story: photo.story?.trim() ?? null,
+    };
   });
 }
 
@@ -185,7 +189,7 @@ async function editor(state: State, post: Story | null, id: string, error?: Http
     title: "", caption: "", story: "", category: "Landscape", location: "", photo_date: new Date().toISOString().slice(0, 10),
   };
   let uploads: EditPhoto[] = [];
-  let edits: Record<string, { alt: string; caption: string }> = {};
+  let edits: Record<string, EditPhoto> = {};
   if (form) {
     values = Object.fromEntries(Object.entries(storyFields).map(([key, max]) => [key, (form.get(key) ?? "").slice(0, max)])) as StoryInput;
     try {
@@ -196,7 +200,9 @@ async function editor(state: State, post: Story | null, id: string, error?: Http
       if (!isFormError(issue)) throw issue;
     }
     edits = Object.fromEntries(photos.map(({ id }) => [id, {
-      alt: (form.get(`alt_${id}`) ?? "").slice(0, 200), caption: (form.get(`caption_${id}`) ?? "").slice(0, 300),
+      id, alt: (form.get(`alt_${id}`) ?? "").slice(0, 200), caption: (form.get(`caption_${id}`) ?? "").slice(0, 300),
+      title: form.has(`title_${id}`) ? (form.get(`title_${id}`) ?? "").slice(0, 100) : null,
+      story: form.has(`story_${id}`) ? (form.get(`story_${id}`) ?? "").slice(0, 12000) : null,
     }]));
   }
   const csrf = await formToken(state.request, state.env, state.identity);
@@ -206,7 +212,7 @@ async function editor(state: State, post: Story | null, id: string, error?: Http
 }
 
 async function mutateStory(state: State, post: Story | null, id: string, ctx: ExecutionContext) {
-  const form = await readForm(state.request, state.env, state.identity);
+  const form = await readForm(state.request, state.env, state.identity, 2 * 1024 * 1024);
   const postId = post ? id : (form.get("post_id") ?? "");
   if (!storyIdPattern.test(postId) || (post && form.get("post_id") !== postId)) throw new HttpError(400, "Reload the story editor.");
   if (post && form.get("revision") !== String(post.revision)) {
@@ -221,6 +227,8 @@ async function mutateStory(state: State, post: Story | null, id: string, ctx: Ex
     if (order.length > maxPhotos || order.some((id) => !storyIdPattern.test(id))) throw new HttpError(400, "Reload the story editor.");
     const existing: SavePhoto[] = order.filter((id) => !remove.has(id)).map((id) => ({
       id, isNew: false, alt: field(form, `alt_${id}`, 200, "alt text"), caption: field(form, `caption_${id}`, 300, "photo caption"),
+      title: form.has(`title_${id}`) ? field(form, `title_${id}`, 100, "photo title") : undefined,
+      story: form.has(`story_${id}`) ? field(form, `story_${id}`, 12000, "photo story") : undefined,
     }));
     const edits = [...existing, ...queuedPhotos(form).map((photo) => ({ ...photo, isNew: true }))];
     if (edits.length > maxPhotos || new Set(edits.map(({ id }) => id)).size !== edits.length) {
@@ -271,11 +279,6 @@ async function adminAction(state: State, section: string, id: string, ctx: Execu
     return redirect("/admin?saved=deleted");
   }
   if (!/^[1-9][0-9]{0,14}$/.test(id)) throw notFound();
-  if (section === "comments" && (action === "approve" || action === "hide" || action === "delete")) {
-    if (action === "delete") await db.prepare("DELETE FROM comments WHERE id = ?").bind(Number(id)).run();
-    else await db.prepare("UPDATE comments SET status = ? WHERE id = ?").bind(action === "approve" ? "approved" : "pending", Number(id)).run();
-    return redirect("/admin/comments?saved=moderated");
-  }
   if (section === "inbox" && (action === "read" || action === "unread" || action === "delete")) {
     if (action === "delete") await db.prepare("DELETE FROM messages WHERE id = ?").bind(Number(id)).run();
     else await db.prepare("UPDATE messages SET read_at = ? WHERE id = ?").bind(action === "read" ? seconds() : null, Number(id)).run();
@@ -295,13 +298,14 @@ async function admin(state: State, ctx: ExecutionContext, path: string, get: boo
   }
   if (get && path === "/admin/sign-in") return redirect("/admin");
   if (get && path === "/admin") return showDashboard(state, "stories");
-  const section = path.match(/^\/admin\/(comments|inbox|settings)$/)?.[1];
+  if (path === "/admin/order") return get ? photoOrderPage(state) : changePhotoOrder(state);
+  const section = path.match(/^\/admin\/(inbox|settings)$/)?.[1];
   if (get && section) return showDashboard(state, section);
   if (!get && path === "/admin/settings") return saveDetails(state);
   const upload = path.match(/^\/admin\/uploads\/([a-f0-9-]{36})(?:\/([a-f0-9-]{36}))?$/);
   if (upload && get && upload[2]) return pendingMedia(env, upload[1], upload[2]);
   if (upload && !get && !upload[2]) return uploadPhoto(request, env, identity, upload[1]);
-  const action = path.match(/^\/admin\/(stories|comments|inbox)\/([a-z0-9-]+)\/action$/);
+  const action = path.match(/^\/admin\/(stories|inbox)\/([a-z0-9-]+)\/action$/);
   if (action && !get) return adminAction(state, action[1], action[2], ctx);
   const id = path.match(/^\/admin\/stories\/(new|[a-f0-9-]{36})$/)?.[1];
   if (!id) throw notFound();
@@ -315,7 +319,7 @@ async function admin(state: State, ctx: ExecutionContext, path: string, get: boo
 }
 
 export function isJournalPath(path: string) {
-  return path === "/" || /^\/(?:journal|stories|contact|admin|media)(?:\/|$)/.test(path);
+  return path === "/" || /^\/(?:journal|page|stories|contact|admin|media)(?:\/|$)/.test(path);
 }
 
 export async function fetchJournal(request: Request, env: Bindings, ctx: ExecutionContext) {
@@ -330,20 +334,12 @@ export async function fetchJournal(request: Request, env: Bindings, ctx: Executi
     if (get && image && storyIdPattern.test(image[1])) return await media(env, state.identity, image[1], !!image[2], request.method === "HEAD");
     state.site = await settings(env.DB);
     if (path.startsWith("/admin")) return await admin(state, ctx, path, get);
-    if (get && path === "/") return html(state, "", "home", home((await publishedCards(env.DB, state.site, "", 1, 4)).cards, state.site));
-    const page = path.match(/^\/journal(?:\/page\/([1-9][0-9]{0,6}))?$/);
-    if (get && page) {
-      const category = url.searchParams.get("category") ?? "";
-      if (category && !categories.includes(category)) throw notFound("This category does not exist.");
-      const n = Number(page[1] ?? 1);
-      const { cards, pageCount, used } = await publishedCards(env.DB, state.site, category, n, 9);
-      if (n > pageCount) throw notFound("This journal page does not exist.");
-      return html(state, "Journal", "journal", archive(cards, used, category, n, pageCount));
-    }
+    if (get && path === "/") return await magazine(state, 1, false);
+    const page = path.match(/^(?:\/journal(?:\/page\/([1-9][0-9]{0,6}))?|\/page\/([1-9][0-9]{0,6}))$/);
+    if (get && page) return await magazine(state, Number(page[1] ?? page[2] ?? 1), path.startsWith("/journal"));
     if (path === "/contact") return get ? await contact(state) : await sendMessage(state);
-    const story = path.match(/^\/stories\/([a-z0-9-]{1,90})(?:\/photos\/([a-z0-9-]{1,64}))?(\/comments)?$/);
-    if (story && get && !story[3]) return await storyPage(state, story[1], story[2]);
-    if (story && !get && story[3]) return await postComment(state, story[1], story[2]);
+    const story = path.match(/^\/stories\/([a-z0-9-]{1,90})(?:\/photos\/([a-z0-9-]{1,64}))?$/);
+    if (story && get) return await storyPage(state, story[1], story[2]);
     throw notFound();
   } catch (error) {
     if (error instanceof HttpError) return errorPage(state, error);

@@ -5,7 +5,6 @@ const entities: Record<string, string> = {
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 };
 export const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (char) => entities[char]);
-export const pad = (n: number) => String(n).padStart(2, "0");
 const dateFormat = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 export const dateLabel = (value: string | number) => dateFormat.format(new Date(typeof value === "number" ? value * 1000 : value));
 export const emailLink = (value: string) => "mailto:" + encodeURIComponent(value).replace("%40", "@");
@@ -55,21 +54,6 @@ export function layout(site: Settings, title: string, active: Active, admin: boo
   </footer>
 </body>
 </html>`;
-}
-
-export function sliderControls(count: number, item: "Story" | "Photo") {
-  if (count < 2) return "";
-  const dots = Array.from({ length: count }, (_, i) =>
-    `<button class="slider-dot" type="button" data-goto="${i}" aria-label="${item} ${i + 1}"${i === 0 ? ' aria-current="true"' : ""}></button>`,
-  );
-  return `<div class="slider-controls" data-controls hidden>
-    <div class="slider-dots" aria-label="${item}">${dots.join("")}</div>
-    <div class="slider-step">
-      <button type="button" class="icon-button" data-prev aria-label="Previous ${item.toLowerCase()}"><span aria-hidden="true">←</span></button>
-      <span class="slider-count" aria-live="polite"><span data-count>01</span> <span aria-hidden="true">/</span> ${pad(count)}</span>
-      <button type="button" class="icon-button" data-next aria-label="Next ${item.toLowerCase()}"><span aria-hidden="true">→</span></button>
-    </div>
-  </div>`;
 }
 
 export function pager(

@@ -5,6 +5,8 @@ export type Photo = {
   id: string;
   alt: string;
   caption: string;
+  title?: string | null;
+  story?: string | null;
   width: number;
   height: number;
   full?: string;
@@ -25,14 +27,14 @@ export type Story = {
   demo?: boolean;
 };
 export type Card = Story & { photo?: Photo; photo_count: number };
-export type Comment = {
-  id: number;
+export type MagazinePhoto = Photo & {
   post_id: string;
-  photo_id: string | null;
-  name: string;
-  body: string;
-  status: "pending" | "approved";
-  created_at: number;
+  slug: string;
+  title: string;
+  category: string;
+  location: string;
+  photo_date: string;
+  demo?: boolean;
 };
 export type Message = {
   id: number;

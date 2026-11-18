@@ -29,6 +29,8 @@ export const photos = sqliteTable("photos", {
   position: integer("position").notNull(),
   alt: text("alt").notNull(),
   caption: text("caption").notNull(),
+  title: text("title"),
+  story: text("story"),
   width: integer("width").notNull(),
   height: integer("height").notNull(),
 }, (photo) => [index("photos_post").on(photo.postId, photo.position, photo.id)]);

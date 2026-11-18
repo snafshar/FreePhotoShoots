@@ -28,39 +28,6 @@ function arrowStep(event) {
   return event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
 }
 
-for (const slider of document.querySelectorAll("[data-slider]")) {
-  const slides = Array.from(slider.querySelectorAll("[data-slide]"));
-  if (slides.length < 2) continue;
-  const dots = slider.querySelectorAll("[data-goto]");
-  const controls = slider.querySelector("[data-controls]");
-  const count = slider.querySelector("[data-count]");
-  const move = (index) => {
-    current = (index + slides.length) % slides.length;
-    slides.forEach((slide, position) => { slide.hidden = position !== current; });
-    dots.forEach((dot, position) => {
-      if (position === current) dot.setAttribute("aria-current", "true");
-      else dot.removeAttribute("aria-current");
-    });
-    count.textContent = String(current + 1).padStart(2, "0");
-  };
-  let current = 0;
-  move(0);
-  controls.hidden = false;
-  slider.querySelector("[data-prev]").addEventListener("click", () => move(current - 1));
-  slider.querySelector("[data-next]").addEventListener("click", () => move(current + 1));
-  dots.forEach((dot) => dot.addEventListener("click", () => move(Number(dot.dataset.goto))));
-  onSwipe(slider.querySelector("[data-slider-touch]"), (step) => move(current + step));
-  slider.addEventListener("keydown", (event) => {
-    if (event.target.closest("dialog")) return;
-    const step = arrowStep(event);
-    if (!step) return;
-    event.preventDefault();
-    const wasInSlide = slides[current].contains(document.activeElement);
-    move(current + step);
-    if (wasInSlide) slides[current].querySelector("a, button")?.focus({ preventScroll: true });
-  });
-}
-
 for (const page of document.querySelectorAll("[data-paged]")) {
   const owned = (element) => element.closest("[data-paged]") === page;
   const go = (step) => {
@@ -73,7 +40,7 @@ for (const page of document.querySelectorAll("[data-paged]")) {
   });
   page.addEventListener("keydown", (event) => {
     if (!owned(event.target) || event.target.closest("dialog")) return;
-    if (event.target !== page && !event.target.closest(".pager, .story-nav, .photo-navigation, .photo-open")) return;
+    if (event.target !== page && !event.target.closest(".pager, .story-nav, .magazine-photo-open")) return;
     const step = arrowStep(event);
     if (step) {
       event.preventDefault();
@@ -142,6 +109,8 @@ if (hostedEditor) {
     queue.value = JSON.stringify(entries.map(({ id, row }) => ({
       id, alt: row.querySelector("[data-upload-alt]").value,
       caption: row.querySelector("[data-upload-caption]").value,
+      title: row.querySelector("[data-upload-title]").value,
+      story: row.querySelector("[data-upload-story]").value,
     })));
     entries.forEach(({ row }, i) => {
       row.querySelector('[data-shift="-1"]').disabled = i === 0;
@@ -149,13 +118,15 @@ if (hostedEditor) {
     });
   };
 
-  function addEntry(id, name, alt = "", caption = "") {
+  function addEntry(id, name, alt = "", caption = "", title = "", story = "") {
     const row = template.content.firstElementChild.cloneNode(true);
     const entry = { id, row };
     row.querySelector("img").src = `${base}/${id}`;
     row.querySelector(".upload-filename").textContent = name;
     row.querySelector("[data-upload-alt]").value = alt;
     row.querySelector("[data-upload-caption]").value = caption;
+    row.querySelector("[data-upload-title]").value = title;
+    row.querySelector("[data-upload-story]").value = story;
     row.addEventListener("input", sync);
     row.addEventListener("click", (event) => {
       if (event.target.closest("[data-remove-upload]")) {
@@ -225,7 +196,8 @@ if (hostedEditor) {
     }
   }
 
-  JSON.parse(queue.value).forEach(({ id, alt, caption }, i) => addEntry(id, `Uploaded photo ${i + 1}`, alt, caption));
+  JSON.parse(queue.value).forEach(({ id, alt, caption, title, story }, i) =>
+    addEntry(id, `Uploaded photo ${i + 1}`, alt, caption, title ?? "", story ?? ""));
   sync();
   picker.addEventListener("change", async () => {
     if (running) return;
@@ -261,4 +233,42 @@ if (hostedEditor) {
     if (running) event.preventDefault();
     sync();
   });
+}
+
+
+const publicationOrder = document.querySelector("[data-publication-order]");
+if (publicationOrder) {
+  const list = publicationOrder.querySelector("[data-publication-list]");
+  const rows = () => [...list.querySelectorAll("[data-publication-photo]")];
+  function updatePositions() {
+    const items = rows();
+    items.forEach((row, index) => {
+      row.querySelector('input[type="number"]').value = String(index + 1);
+      row.querySelector('[data-publication-move="-1"]').disabled = index === 0;
+      row.querySelector('[data-publication-move="1"]').disabled = index === items.length - 1;
+    });
+  }
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-publication-move]");
+    if (!button || button.disabled) return;
+    const row = button.closest("[data-publication-photo]");
+    if (button.dataset.publicationMove === "-1") row.previousElementSibling.before(row);
+    else row.nextElementSibling.after(row);
+    updatePositions();
+    const focus = button.disabled ? row.querySelector("[data-publication-move]:not(:disabled)") : button;
+    focus?.focus({ preventScroll: true });
+  });
+  list.addEventListener("change", (event) => {
+    if (!event.target.matches('input[type="number"]')) return;
+    const items = rows();
+    const destination = event.target.valueAsNumber;
+    if (!Number.isInteger(destination) || destination < 1 || destination > items.length) return;
+    const row = event.target.closest("[data-publication-photo]");
+    const index = items.indexOf(row);
+    if (destination - 1 < index) items[destination - 1].before(row);
+    else if (destination - 1 > index) items[destination - 1].after(row);
+    updatePositions();
+    row.querySelector('input[type="number"]').focus({ preventScroll: true });
+  });
+  updatePositions();
 }

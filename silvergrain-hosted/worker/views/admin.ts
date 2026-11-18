@@ -1,6 +1,6 @@
-import { categories, maxPhotos, photoPageUrl, photoUrl, storyDiscussionUrl } from "../data";
-import type { dashboard } from "../data";
-import type { Photo, Settings, Story, StoryInput } from "../types";
+import { categories, maxPhotos, photoPageUrl, photoUrl } from "../data";
+import type { dashboard, EditPhoto } from "../data";
+import type { MagazinePhoto, Photo, Settings, Story, StoryInput } from "../types";
 import { arrow, dateLabel, emailLink, escape as e, hidden, notice } from "./layout";
 
 export function signIn(signedIn: boolean) {
@@ -13,19 +13,20 @@ export function signIn(signedIn: boolean) {
 }
 
 const sections = [
-  ["stories", "/admin", "Stories"], ["comments", "/admin/comments", "Comments"],
+  ["stories", "/admin", "Stories"], ["order", "/admin/order", "Photo order"],
   ["inbox", "/admin/inbox", "Inbox"], ["settings", "/admin/settings", "Settings"],
 ];
+
+function studioNavigation(section: string, unread = 0) {
+  return sections.map(([key, url, label]) => `<a href="${url}"${key === section ? ' aria-current="page"' : ""}>${label}${key === "inbox" && unread ? ` <span>${unread}</span>` : ""}</a>`).join("");
+}
 
 export function dashboardView(
   state: Awaited<ReturnType<typeof dashboard>>, section: string, view: string, site: Settings,
   csrf: string, message: string, error = "",
 ) {
-  const { stats, cards, comments, messages } = state;
-  const nav = sections.map(([key, url, label]) => {
-    const count = key === "comments" ? stats.pending : key === "inbox" ? stats.unread : 0;
-    return `<a href="${url}"${key === section ? ' aria-current="page"' : ""}>${label}${count ? ` <span>${count}</span>` : ""}</a>`;
-  }).join("");
+  const { stats, cards, messages } = state;
+  const nav = studioNavigation(section, stats.unread);
   const filters = [["all", "All"], ["published", `Published ${stats.published}`], ["draft", `Drafts ${stats.draft}`]];
   let content = "";
   if (section === "stories") {
@@ -48,27 +49,6 @@ export function dashboardView(
         }).join("") : '<li class="empty">There are no stories in this view.</li>'}
       </ul>
     </div>`;
-  } else if (section === "comments") {
-    content = `<section class="dashboard-content">
-      <div class="section-heading"><h2>Comments</h2><span class="muted">${stats.pending} pending</span></div>
-      ${comments.length ? comments.map((item) => {
-        const href = item.photo_id ? photoPageUrl(item.slug, item.photo_id) : storyDiscussionUrl(item.slug);
-        const subject = item.position !== null ? `Photo ${item.position + 1}` : "Story discussion";
-        return `<article class="inbox-item">
-        <div class="entry-meta"><strong>${e(item.name)}</strong><time>${dateLabel(item.created_at)}</time></div>
-        ${item.slug ? `<a class="small-link" href="${href}#comments">${e(item.title)} · ${subject} ↗</a>` : ""}
-        ${item.photo_caption ? `<p class="muted moderation-caption">${e(item.photo_caption)}</p>` : ""}
-        <p class="prose">${e(item.body)}</p>
-        <div class="item-actions"><span class="entry-state">${e(item.status)}</span>
-          <form method="post" action="/admin/comments/${item.id}/action">
-            ${hidden("csrf", csrf)}
-            ${item.status === "pending" ? '<button class="button compact" name="action" value="approve">Approve</button>' : '<button class="button compact" name="action" value="hide">Hide</button>'}
-            <button class="button compact" name="action" value="delete">Delete</button>
-          </form>
-        </div>
-      </article>`;
-      }).join("") : '<p class="empty">Comments on your photographs will appear here.</p>'}
-    </section>`;
   } else if (section === "inbox") {
     content = `<section class="dashboard-content">
       <div class="section-heading"><h2>Inbox</h2><span class="muted">${stats.unread} unread</span></div>
@@ -111,9 +91,42 @@ export function dashboardView(
   </div>`;
 }
 
+export function orderView(photos: MagazinePhoto[], revision: string, csrf: string, message: string, error = "") {
+  return `<div class="shell studio">
+    <header class="studio-heading">
+      <div><p class="eyebrow">Silvergrain Studio</p><h1>Photo order</h1></div>
+      <a class="button" href="/">View magazine ${arrow}</a>
+    </header>
+    <nav class="studio-nav" aria-label="Dashboard">${studioNavigation("order")}</nav>
+    ${notice(message)}${notice(error, true)}
+    ${photos.length ? `<form class="form order-form" method="post" action="/admin/order" data-publication-order>
+      ${hidden("csrf", csrf)}${hidden("order_revision", revision)}
+      <p class="muted order-instructions">Set the reading order. Every magazine page shows 10 photos.</p>
+      <ol class="publication-order-list" data-publication-list>
+        ${photos.map((photo, index) => `<li class="publication-order-row" data-publication-photo>
+          ${hidden("publication_photo", photo.id)}
+          <img src="${photoUrl(photo, true)}" alt="" width="96" height="64" loading="lazy">
+          <div class="order-photo-title">
+            <a href="${photoPageUrl(photo.slug, photo.id)}">${e(photo.title)}</a>
+            <p class="muted">${e(photo.location || photo.category)}${photo.demo ? " / Sample" : ""}</p>
+          </div>
+          <label class="field order-position">Position
+            <input type="number" name="position_${photo.id}" value="${index + 1}" min="1" max="${photos.length}" step="1" required>
+          </label>
+          <div class="reorder">
+            <button class="icon-button" type="button" data-publication-move="-1" aria-label="Move ${e(photo.title)} earlier">↑</button>
+            <button class="icon-button" type="button" data-publication-move="1" aria-label="Move ${e(photo.title)} later">↓</button>
+          </div>
+        </li>`).join("")}
+      </ol>
+      <button class="button button-light" type="submit">Save photo order</button>
+    </form>` : '<p class="empty">Published photos will appear here.</p>'}
+  </div>`;
+}
+
 type Editor = {
   id: string; post: Story | null; photos: Photo[]; values: StoryInput; csrf: string;
-  error?: string; queued?: string; edits?: Record<string, {alt: string; caption: string}>;
+  error?: string; queued?: string; edits?: Record<string, EditPhoto>;
 };
 
 export function editorView(input: Editor) {
@@ -134,17 +147,16 @@ export function editorView(input: Editor) {
       <div class="editor-grid">
         <section class="form editor-panel" aria-label="Story details">
           <label class="field">Title <input name="title" value="${e(values.title)}" maxlength="100" required></label>
-          <label class="field">Story intro <textarea name="caption" rows="2" maxlength="300">${e(values.caption)}</textarea></label>
+          ${hidden("caption", values.caption)}${hidden("story", values.story)}
           <div class="field-row">
             <label class="field">Category <select name="category">${categories.map((name) => `<option${name === values.category ? " selected" : ""}>${name}</option>`).join("")}</select></label>
             <label class="field">Photo date <input type="date" name="photo_date" value="${e(values.photo_date)}"></label>
           </div>
           <label class="field">Location <input name="location" value="${e(values.location)}" maxlength="100"></label>
-          <label class="field">Story <textarea name="story" rows="9" maxlength="12000">${e(values.story)}</textarea></label>
         </section>
         <section class="editor-panel editor-photos" aria-labelledby="photos-heading">
           <h2 id="photos-heading">Photographs</h2>
-          <p class="muted">Up to ${maxPhotos} JPEG, PNG, or WebP images. The first photo becomes the cover.</p>
+          <p class="muted">Add up to ${maxPhotos} photos, each with its own story. Set the magazine sequence in <a href="/admin/order">Photo order</a>.</p>
           <div class="existing-photos" data-photo-order>
             ${photos.map((photo) => `<div class="editor-photo" data-photo>
               ${hidden("photo_order", photo.id)}
@@ -157,7 +169,9 @@ export function editorView(input: Editor) {
                 <label class="check"><input type="checkbox" name="remove_photo" value="${photo.id}"> Remove</label>
               </div>
               <label class="field">Alt text <input name="alt_${photo.id}" value="${e(edits?.[photo.id]?.alt ?? photo.alt)}" maxlength="200"></label>
+              <label class="field">Photo title <input name="title_${photo.id}" value="${e(edits?.[photo.id]?.title ?? photo.title ?? values.title)}" maxlength="100"></label>
               <label class="field">Photo caption <input name="caption_${photo.id}" value="${e(edits?.[photo.id]?.caption ?? photo.caption)}" maxlength="300"></label>
+              <label class="field">Story for this photo <textarea name="story_${photo.id}" rows="6" maxlength="12000">${e(edits?.[photo.id]?.story ?? photo.story ?? values.story)}</textarea></label>
             </div>`).join("")}
           </div>
           <label class="field upload-field">Add photographs <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-hosted-upload></label>
@@ -173,7 +187,9 @@ export function editorView(input: Editor) {
                 <button class="button compact" type="button" data-remove-upload>Remove</button>
               </div>
               <label class="field">Alt text <input maxlength="200" data-upload-alt></label>
+              <label class="field">Photo title <input maxlength="100" data-upload-title></label>
               <label class="field">Photo caption <input maxlength="300" data-upload-caption></label>
+              <label class="field">Story for this photo <textarea rows="6" maxlength="12000" data-upload-story></textarea></label>
             </div>
           </template>
           <noscript><p class="muted">Enable JavaScript to add photographs.</p></noscript>
@@ -185,7 +201,7 @@ export function editorView(input: Editor) {
       <summary>Delete story</summary>
       <form class="form" method="post" action="/admin/stories/${post.id}/action">
         ${hidden("csrf", csrf)}${hidden("revision", post.revision)}
-        <label class="check"><input type="checkbox" name="confirm" value="yes" required> Delete this story, its photos, and its comments.</label>
+        <label class="check"><input type="checkbox" name="confirm" value="yes" required> Delete this story and its photos.</label>
         <button class="button" type="submit" name="action" value="delete">Delete permanently</button>
       </form>
     </details>` : ""}

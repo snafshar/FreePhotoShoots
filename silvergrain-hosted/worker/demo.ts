@@ -1,7 +1,7 @@
 import type { Card, Photo } from "./types";
 
-const samplePhoto = (key: string, alt: string, caption: string): Photo => ({
-  id: key, alt, caption, width: 1536, height: 1024,
+const samplePhoto = (key: string, alt: string, caption: string, title?: string, story?: string): Photo => ({
+  id: key, alt, caption, title, story, width: 1536, height: 1024,
   full: `/static/demo/${key}.webp`, small: `/static/demo/${key}-small.webp`,
 });
 
@@ -25,8 +25,12 @@ export const samples = [
     "Before sunrise in the Dolomites, when the valley belongs to the fog.",
     "The ridgeline appeared first. For a few minutes it was the only shape above the valley, and the low cloud turned everything beneath it a soft, even gray.\n\nBy the lake, the same mountains almost disappeared into their reflection. These two frames hold that small change in light.",
     "Landscape", "Dolomites, Italy", "2026-10-18", [
-      samplePhoto("dolomites", "Jagged alpine peaks rising above a dark valley filled with fog", "The ridgeline before sunrise."),
-      samplePhoto("alpine-lake", "A foggy alpine lake reflecting the mountains", "The still water at first light."),
+      samplePhoto("dolomites", "Jagged alpine peaks rising above a dark valley filled with fog", "The ridgeline before sunrise.",
+        "Where the light falls",
+        "The ridgeline appeared first. For a few minutes it was the only shape above the valley, and the low cloud turned everything beneath it a soft, even gray."),
+      samplePhoto("alpine-lake", "A foggy alpine lake reflecting the mountains", "The still water at first light.",
+        "At first light",
+        "By the lake, the mountains almost disappeared into their reflection. The water held the same soft gray as the sky, until the first breeze broke the surface."),
     ],
   ),
   sample(

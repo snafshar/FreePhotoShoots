@@ -72,143 +72,166 @@ before(async () => {
 });
 after(async () => runtime?.dispose());
 
-test("public journal, signed-in owner, and dashboard boundary", async () => {
+test("public pages are a photo magazine and the dashboard remains owner-only", async () => {
   const homepage = await request("/");
-  const cover = await homepage.text();
-  assert.match(cover, /<h1>Silvergrain<\/h1>/);
-  assert.match(cover, /Where the<br><em>light falls/);
-  const journal = await request("/journal?category=Architecture");
-  const filtered = await journal.text();
+  const markup = await homepage.text();
+  assert.match(markup, /<h1>Silvergrain<\/h1>/);
+  assert.equal((markup.match(/data-magazine-photo=/g) ?? []).length, 5);
+  assert.match(markup, /Where the light falls/);
+  assert.match(markup, /At first light/);
+  assert.doesNotMatch(markup, /comment-form|Photo comments|data-slider|Featured story/);
+  const filtered = await (await request("/journal?category=Architecture")).text();
+  assert.equal((filtered.match(/data-magazine-photo=/g) ?? []).length, 1);
   assert.match(filtered, /Between the arches/);
   assert.doesNotMatch(filtered, /The shape of water/);
   assert.match(await (await request("/admin")).text(), /Sign in with ChatGPT/);
   assert.equal((await request("/admin", { headers: member })).status, 403);
   const studio = await request("/admin", { headers: owner });
   assert.equal(studio.status, 200);
-  assert.match(await studio.text(), /Dashboard/);
+  const dashboard = await studio.text();
+  assert.match(dashboard, /Photo order/);
+  assert.doesNotMatch(dashboard, /Comments|\/admin\/comments/);
+  assert.equal((await request("/admin/comments", { headers: owner })).status, 404);
   assert.equal((await request("/admin", { headers: { ...owner, "oai-authenticated-user-id": "different-id" } })).status, 403);
-  assert.equal((await request("/admin/settings", { method: "POST", body: new URLSearchParams(), headers: member })).status, 303);
   const edit = await page("/admin/settings", owner);
-  const noToken = await request("/admin/settings", { method: "POST", body: new URLSearchParams({ name: "Changed" }), headers: edit.headers });
-  assert.equal(noToken.status, 403);
+  assert.equal((await request("/admin/settings", {
+    method: "POST", body: new URLSearchParams({ name: "Changed" }), headers: edit.headers,
+  })).status, 403);
 });
 
-test("two photos stay private in a draft, then publish, reorder, unpublish, and delete", async () => {
-  const newPath = "/admin/stories/new";
-  const draft = await page(newPath, owner);
+test("each uploaded photo has its own story through publishing, editing, and private drafts", async () => {
+  const draft = await page("/admin/stories/new", owner);
   const id = field(draft.text, "post_id");
   const left = await upload(draft, id, "dolomites");
   const right = await upload(draft, id, "alpine-lake");
-  assert.equal((await request(`/admin/uploads/${id}/${right}`, { headers: member })).status, 403);
-  assert.equal((await request(`/admin/uploads/${id}/${right}`, { headers: owner })).status, 200);
+  const entries = [
+    { id: left, alt: "Mountain frame", caption: "Before sunrise", title: "The high ridge", story: "A mountain story only." },
+    { id: right, alt: "Lake frame", caption: "Still water", title: "The reflecting lake", story: "A lake story only." },
+  ];
   const fields = {
-    post_id: id, title: "Morning on the Arno", category: "Landscape", location: "Pisa", photo_date: "2026-11-12",
-    caption: "Two views from the bridge", story: "First paragraph.\n\nSecond paragraph.",
-    intent: "draft", uploads: JSON.stringify([{ id: left, alt: "First frame", caption: "" }, { id: right, alt: "Second frame", caption: "Reflections" }]),
+    post_id: id, title: "Mountain trip", category: "Landscape", location: "Pisa", photo_date: "2026-11-12",
+    caption: "", story: "Earlier shared text.", intent: "draft", uploads: JSON.stringify(entries),
   };
-  let response = await submit(newPath, draft, fields);
-  assert.equal(response.status, 303, await response.text());
-  const story = `/stories/morning-on-the-arno-${id.slice(0, 8)}`;
+  assert.equal((await submit("/admin/stories/new", draft, fields)).status, 303);
+  const story = `/stories/mountain-trip-${id.slice(0, 8)}`;
   const editPath = `/admin/stories/${id}`;
-  const cover = `/media/${right}`;
   assert.equal((await request(story)).status, 404);
-  assert.equal((await request(cover, { headers: member })).status, 404);
-  const preview = await request(story, { headers: owner });
-  assert.match(await preview.text(), /Draft preview/);
-  assert.equal((await request(cover, { headers: owner })).headers.get("content-type"), "image/webp");
+  assert.equal((await request(`/media/${left}`, { headers: member })).status, 404);
+  const preview = await request(`${story}/photos/${left}`, { headers: owner });
+  const previewHtml = await preview.text();
+  assert.match(previewHtml, /Draft preview|A mountain story only/);
+  assert.doesNotMatch(previewHtml, /A lake story only/);
+  assert.equal((await request(`/media/${left}`, { headers: owner })).headers.get("content-type"), "image/webp");
   let edit = await page(editPath, owner);
-  let revision = field(edit.text, "revision");
   const order = [right, left];
-  const publish = { ...fields, intent: "publish", revision, uploads: "[]", [`alt_${left}`]: "First frame", [`alt_${right}`]: "Second frame" };
-  response = await submit(editPath, edit, publish, { order });
-  assert.equal(response.status, 303, await response.text());
+  const publish = { ...fields, intent: "publish", revision: field(edit.text, "revision"), uploads: "[]",
+    [`alt_${left}`]: "Mountain frame", [`alt_${right}`]: "Lake frame",
+    [`caption_${left}`]: "Before sunrise", [`caption_${right}`]: "Still water",
+  };
+  assert.equal((await submit(editPath, edit, publish, { order })).status, 303);
   assert.equal((await submit(editPath, edit, publish, { order })).status, 409);
-  const publicStory = await request(story);
-  const storyHtml = await publicStory.text();
-  assert.equal(publicStory.status, 200, storyHtml);
-  assert.match(storyHtml, /alt="Second frame"/);
-  assert.doesNotMatch(storyHtml, /alt="First frame"/);
-  assert.ok(storyHtml.includes(`${story}/photos/${left}#photograph`));
-  const firstPhoto = await page(`${story}/photos/${left}`);
-  assert.match(firstPhoto.text, /<figcaption>First frame<\/figcaption>/);
-  assert.doesNotMatch(firstPhoto.text, /alt="Second frame"/);
+  const magazine = await (await request("/")).text();
+  assert.match(magazine, /A mountain story only/);
+  assert.match(magazine, /A lake story only/);
+  const mountain = await (await request(`${story}/photos/${left}`)).text();
+  assert.match(mountain, /<h1>The high ridge<\/h1>/);
+  assert.match(mountain, /A mountain story only/);
+  assert.doesNotMatch(mountain, /A lake story only|Earlier shared text/);
+  const lake = await (await request(story)).text();
+  assert.match(lake, /<h1>The reflecting lake<\/h1>/);
+  assert.match(lake, /A lake story only/);
   assert.equal((await request(`${story}/photos/dolomites`)).status, 404);
-
-  const photoComment = await submit(`${story}/photos/${left}/comments`, firstPhoto, { name: "Reader", body: "View from the first frame" });
-  assert.equal(photoComment.headers.get("Location"), `${story}/photos/${left}?comment=sent#comments`);
-  const item = await db.prepare("SELECT post_id, photo_id FROM comments WHERE body = ?").bind("View from the first frame").first();
-  assert.deepEqual(item, { post_id: id, photo_id: left });
-  assert.match(storyHtml, /Second paragraph/);
-  assert.equal((await request(cover)).status, 200);
+  assert.equal((await request(`${story}/photos/${left}/comments`, { method: "POST" })).status, 404);
 
   edit = await page(editPath, owner);
-  revision = field(edit.text, "revision");
-  const remove = { ...publish, intent: "save", revision, remove_photo: left };
-  assert.equal((await submit(editPath, edit, remove, { order })).status, 303);
-  assert.equal((await request(`${story}/photos/${left}`)).status, 404);
-  assert.equal(await db.prepare("SELECT 1 FROM comments WHERE photo_id = ?").bind(left).first(), null);
-  assert.equal((await request(cover)).status, 200);
+  const update = {
+    ...publish, intent: "save", revision: field(edit.text, "revision"),
+    [`title_${left}`]: "The ridgeline", [`story_${left}`]: "The revised mountain story.",
+  };
+  assert.equal((await submit(editPath, edit, update, { order })).status, 303);
+  const revised = await (await request(`${story}/photos/${left}`)).text();
+  assert.match(revised, /The revised mountain story/);
+  assert.doesNotMatch(await (await request(`${story}/photos/${right}`)).text(), /revised mountain/);
 
   edit = await page(editPath, owner);
-  revision = field(edit.text, "revision");
-  assert.equal((await submit(editPath, edit, { ...publish, intent: "draft", revision }, { order: [right] })).status, 303);
+  assert.equal((await submit(editPath, edit, { ...update, intent: "draft", revision: field(edit.text, "revision") }, { order })).status, 303);
   assert.equal((await request(story)).status, 404);
-  assert.equal((await request(`${story}/photos/${left}`)).status, 404);
-  assert.equal((await submit(`${story}/photos/${right}/comments`, firstPhoto, { name: "Reader", body: "Hidden photo" })).status, 404);
-  assert.equal((await request(cover)).status, 404);
+  assert.equal((await request(`/media/${right}`)).status, 404);
   edit = await page(editPath, owner);
   assert.equal((await submit(`${editPath}/action`, edit, {
     revision: field(edit.text, "revision"), action: "delete", confirm: "yes",
   })).status, 303);
   assert.equal((await request(story, { headers: owner })).status, 404);
-  assert.equal(await db.prepare("SELECT 1 from comments WHERE post_id = ?").bind(id).first(), null);
 });
 
-test("a multi-photo story has separate moderated threads and retains earlier comments", async () => {
-  const path = "/stories/where-the-light-falls";
-  const first = `${path}/photos/dolomites`;
-  const second = `${path}/photos/alpine-lake`;
-  const firstPage = await page(first);
-  const secondPage = await page(second);
-  assert.match(firstPage.text, /<figcaption>The ridgeline before sunrise\.<\/figcaption>/);
-  assert.match(secondPage.text, /<figcaption>The still water at first light\.<\/figcaption>/);
-  assert.equal((secondPage.text.match(/<figcaption>/g) ?? []).length, 1);
-  assert.ok(secondPage.text.includes(`action="${second}/comments#comments"`));
+test("custom photo order is saved across pages with ten photos per page", async () => {
+  const ids = [];
+  const posts = [];
+  for (let index = 0; index < 12; index++) {
+    const postId = crypto.randomUUID();
+    const photoId = crypto.randomUUID();
+    ids.push(photoId);
+    posts.push(postId);
+    await db.batch([
+      db.prepare(`INSERT INTO posts (id, slug, title, caption, story, category, location, photo_date, published_at, updated_at)
+        VALUES (?, ?, ?, '', ?, 'Landscape', '', '', ?, ?)`)
+        .bind(postId, `test-photo-${index}`, `Photo ${index + 1}`, `Independent story ${index + 1}.`, 1000 + index, 1000 + index),
+      db.prepare(`INSERT INTO photos (id, post_id, position, alt, caption, width, height)
+        VALUES (?, ?, 0, 'Test photograph', '', 120, 80)`).bind(photoId, postId),
+    ]);
+  }
+  const orderPage = await page("/admin/order", owner);
+  const allIds = [...orderPage.text.matchAll(/name="publication_photo" value="([^"]+)"/g)].map((entry) => entry[1]);
+  assert.equal(allIds.length, 17);
+  const desired = allIds.slice().reverse();
+  const data = new URLSearchParams({ csrf: orderPage.token, order_revision: field(orderPage.text, "order_revision") });
+  desired.forEach((id, index) => {
+    data.append("publication_photo", id);
+    data.set(`position_${id}`, String(index + 1));
+  });
+  assert.equal((await request("/admin/order", { method: "POST", body: data, headers: orderPage.headers })).status, 303);
+  assert.equal((await request("/admin/order", { method: "POST", body: data, headers: orderPage.headers })).status, 409);
 
-  const comment = "Silver light on the lake.";
-  const sent = await submit(`${second}/comments`, secondPage, { name: "A reader", body: comment });
-  assert.equal(sent.status, 303);
-  assert.equal(sent.headers.get("Location"), `${second}?comment=sent#comments`);
-  assert.equal((await submit(`${path}/photos/coast/comments`, secondPage, { name: "A reader", body: "Wrong story" })).status, 404);
-  assert.doesNotMatch((await page(second)).text, /Silver light on the lake/);
-  const moderation = await page("/admin/comments", owner);
-  assert.ok(moderation.text.includes(`${second}#comments`));
-  assert.match(moderation.text, /Where the light falls · Photo 2/);
-  const action = moderation.text.match(/\/admin\/comments\/\d+\/action/)[0];
-  assert.equal((await submit(action, moderation, { action: "approve" })).status, 303);
-  assert.match((await page(second)).text, /Silver light on the lake/);
-  assert.doesNotMatch((await page(first)).text, /Silver light on the lake/);
-  assert.doesNotMatch((await page(path)).text, /Silver light on the lake/);
+  const photoIds = (html) => [...html.matchAll(/data-magazine-photo="([^"]+)"/g)].map((entry) => entry[1]);
+  const first = await (await request("/")).text();
+  const second = await (await request("/page/2")).text();
+  assert.deepEqual(photoIds(first), desired.slice(0, 10));
+  assert.deepEqual(photoIds(second), desired.slice(10));
+  assert.match(first, /Page 1 of 2/);
+  assert.match(second, /Page 2 of 2/);
+  assert.equal((await request("/page/3")).status, 404);
+  const journal = await (await request("/journal")).text();
+  const journalTwo = await (await request("/journal/page/2")).text();
+  assert.deepEqual(photoIds(journal), desired.slice(0, 10));
+  assert.deepEqual(photoIds(journalTwo), desired.slice(10));
+  const ownerOnly = await request("/admin/order", { method: "POST", body: data, headers: member });
+  assert.equal(ownerOnly.status, 303);
+  const current = await page("/admin/order", owner);
+  const invalid = new URLSearchParams({ csrf: current.token, order_revision: field(current.text, "order_revision") });
+  desired.forEach((id) => { invalid.append("publication_photo", id); invalid.set(`position_${id}`, "1"); });
+  assert.equal((await request("/admin/order", { method: "POST", body: invalid, headers: current.headers })).status, 400);
+  assert.deepEqual(photoIds(await (await request("/")).text()), desired.slice(0, 10));
 
-  await db.prepare(`INSERT INTO comments (post_id, name, body, status, created_at)
-    VALUES ('sample-where-the-light-falls', 'Earlier reader', 'The original story discussion.', 'approved', 1760000000)`).run();
-  const article = await page(second);
-  assert.match(article.text, /View earlier story discussion/);
-  assert.doesNotMatch(article.text, /The original story discussion/);
-  const legacy = await request(`${path}?discussion=story`);
-  assert.equal(legacy.status, 200);
-  const archived = await legacy.text();
-  assert.match(archived, /The original story discussion/);
-  assert.doesNotMatch(archived, /Silver light on the lake|Post comment/);
+  // Rows from earlier versions inherit their original story until edited.
+  assert.match(second, /Independent story/);
+  await db.batch(posts.map((id) => db.prepare("DELETE FROM posts WHERE id = ?").bind(id)));
 });
 
-test("the contact form delivers messages once", async () => {
+test("comment sections and submission routes are removed", async () => {
+  for (const path of ["/", "/journal", "/stories/where-the-light-falls", "/stories/where-the-light-falls/photos/alpine-lake"]) {
+    const response = await request(path);
+    assert.equal(response.status, 200);
+    assert.doesNotMatch(await response.text(), /Photo comments|Post comment|discussion-link|comment-form/);
+  }
+  assert.equal((await request("/stories/where-the-light-falls/comments", { method: "POST" })).status, 404);
+  assert.equal((await request("/admin/comments", { headers: owner })).status, 404);
+});
+
+test("the contact form still delivers messages once", async () => {
   const contact = await page("/contact");
   const [, a, b] = contact.text.match(/What is (\d+) \+ (\d+)\?/);
-  const fields = {
-    name: "A reader", email: "reader@example.com", body: "Hello from Pisa.",
-    challenge: field(contact.text, "challenge"), answer: String(Number(a) + Number(b)),
-  };
+  const fields = { name: "A reader", email: "reader@example.com", body: "Hello from Pisa.",
+    challenge: field(contact.text, "challenge"), answer: String(Number(a) + Number(b)) };
   assert.equal((await submit("/contact", contact, fields)).status, 303);
   assert.equal((await submit("/contact", contact, fields)).status, 400);
   const inbox = await page("/admin/inbox", owner);
@@ -217,16 +240,14 @@ test("the contact form delivers messages once", async () => {
   assert.equal((await request("/admin/inbox", { headers: member })).status, 303);
 });
 
-test("contact details and sample visibility are controlled by the owner", async () => {
+test("the owner controls public contact details and sample visibility", async () => {
   const settings = await page("/admin/settings", owner);
-  const response = await submit("/admin/settings", settings, {
+  assert.equal((await submit("/admin/settings", settings, {
     name: "Sina", email: "public@example.com", phone: "+39 0123 4567", hide_samples: "1",
-  });
-  assert.equal(response.status, 303);
-  const contact = await request("/contact");
-  const html = await contact.text();
-  assert.match(html, /mailto:public@example\.com/);
-  assert.match(html, /tel:\+3901234567/);
+  })).status, 303);
+  const contact = await (await request("/contact")).text();
+  assert.match(contact, /mailto:public@example\.com/);
+  assert.match(contact, /tel:\+3901234567/);
   assert.equal((await request("/stories/where-the-light-falls")).status, 404);
-  assert.match(await (await request("/")).text(), /Stories will appear here when/);
+  assert.match(await (await request("/")).text(), /Published photographs will appear here/);
 });

@@ -1,13 +1,12 @@
 import { samples, sampleBySlug } from "./demo";
 import { HttpError, seconds } from "./security";
-import type { Bindings, Card, Comment, Photo, Settings, Story, StoryInput } from "./types";
+import type { Bindings, Card, MagazinePhoto, Photo, Settings, Story, StoryInput } from "./types";
 
 export const categories = ["Landscape", "Architecture", "Street", "Portrait", "Seascape", "Other"];
 export const maxPhotos = 10;
 export const maxPhotoBytes = 6 * 1024 * 1024;
 export const maxPhotoSide = 1920;
 const pendingHours = 24 * 60 * 60;
-const SAMPLE_ID_PREFIX = "sample-";
 export const storyIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const coverSQL = `SELECT p.*, f.id AS photo_id, f.alt, f.caption AS photo_caption, f.width, f.height,
     (SELECT count(*) FROM photos WHERE post_id = p.id) AS photo_count
@@ -18,7 +17,7 @@ type CardRow = Story & {
   photo_id: string | null; alt: string; photo_caption: string; width: number; height: number; photo_count: number;
 };
 type Pending = Photo & { post_id: string; expires: number };
-export type EditPhoto = { id: string; alt: string; caption: string };
+export type EditPhoto = { id: string; alt: string; caption: string; title?: string | null; story?: string | null };
 export type SavePhoto = EditPhoto & { isNew: boolean };
 
 function card(row: CardRow): Card {
@@ -32,10 +31,6 @@ export function photoUrl(photo: Photo, small = false) {
 
 export function photoPageUrl(slug: string, photoId: string) {
   return `/stories/${encodeURIComponent(slug)}/photos/${encodeURIComponent(photoId)}`;
-}
-
-export function storyDiscussionUrl(slug: string) {
-  return `/stories/${encodeURIComponent(slug)}?discussion=story`;
 }
 
 export async function settings(db: D1Database): Promise<Settings> {
@@ -52,22 +47,82 @@ export async function setSettings(db: D1Database, values: Settings) {
   ));
 }
 
-export async function publishedCards(db: D1Database, site: Settings, category: string, page: number, pageSize: number) {
-  const visibleSamples = site.hide_samples === "1" ? [] : samples.filter((entry) => !category || entry.category === category);
-  const offset = (page - 1) * pageSize;
-  const [counts, entries, used] = await db.batch([
-    db.prepare("SELECT count(*) AS total FROM posts WHERE published_at IS NOT NULL AND (? = '' OR category = ?)").bind(category, category),
-    db.prepare(`${coverSQL} WHERE p.published_at IS NOT NULL AND (? = '' OR p.category = ?)
-      ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?`).bind(category, category, pageSize, offset),
-    db.prepare("SELECT DISTINCT category FROM posts WHERE published_at IS NOT NULL"),
+export const photosPerPage = 10;
+
+type PhotoOrder = { revision: string; ids: string[] };
+
+async function photoOrder(db: D1Database) {
+  const raw = await db.prepare("SELECT value FROM settings WHERE key = 'photo_order'").first<string>("value") ?? "";
+  const parsed: PhotoOrder = raw ? JSON.parse(raw) : { revision: "", ids: [] };
+  return { raw, ...parsed };
+}
+
+function samplePhotos(site: Settings): MagazinePhoto[] {
+  if (site.hide_samples === "1") return [];
+  return samples.flatMap((post) => post.photos.map((photo) => ({
+    ...photo, post_id: post.id, slug: post.slug, title: photo.title || post.title,
+    story: photo.story ?? post.story, category: post.category, location: post.location,
+    photo_date: post.photo_date, demo: true,
+  })));
+}
+
+export async function magazineCatalogue(db: D1Database, site: Settings) {
+  const [result, order] = await Promise.all([
+    db.prepare(`SELECT f.id, f.post_id, f.alt, f.caption, f.width, f.height, p.slug,
+        COALESCE(NULLIF(f.title, ''), p.title) AS title, p.category, p.location, p.photo_date
+      FROM photos AS f JOIN posts AS p ON p.id = f.post_id
+      WHERE p.published_at IS NOT NULL ORDER BY p.published_at DESC, p.id DESC, f.position, f.id`).all<MagazinePhoto>(),
+    photoOrder(db),
   ]);
-  const count = Number((counts.results[0] as { total: number }).total);
-  const cards = (entries.results as CardRow[]).map(card);
-  const sampleOffset = Math.max(offset - count, 0);
-  cards.push(...visibleSamples.slice(sampleOffset, sampleOffset + pageSize - cards.length));
-  const set = new Set((used.results as { category: string }[]).map((row) => row.category));
-  if (site.hide_samples !== "1") samples.forEach((sample) => set.add(sample.category));
-  return { cards, pageCount: Math.max(1, Math.ceil((count + visibleSamples.length) / pageSize)), used: categories.filter((item) => set.has(item)) };
+  const entries = [...result.results, ...samplePhotos(site)];
+  const ranks = new Map(order.ids.map((id, position) => [id, position]));
+  entries.sort((a, b) => (ranks.get(a.id) ?? entries.length) - (ranks.get(b.id) ?? entries.length));
+  return { entries, order };
+}
+
+export async function magazinePage(db: D1Database, site: Settings, category: string, page: number) {
+  const { entries } = await magazineCatalogue(db, site);
+  const filtered = category ? entries.filter((entry) => entry.category === category) : entries;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / photosPerPage));
+  if (page > pageCount) throw new HttpError(404, "This page is unavailable.");
+  const photos = filtered.slice((page - 1) * photosPerPage, page * photosPerPage);
+  const owned = photos.filter((photo) => !photo.demo);
+  if (owned.length) {
+    const texts = await db.prepare(`SELECT f.id, COALESCE(f.story, p.story) AS story
+      FROM photos AS f JOIN posts AS p ON p.id = f.post_id
+      WHERE p.published_at IS NOT NULL AND f.id IN (${owned.map(() => "?").join(",")})`)
+      .bind(...owned.map((photo) => photo.id)).all<{ id: string; story: string }>();
+    const stories = new Map(texts.results.map((item) => [item.id, item.story]));
+    photos.forEach((photo) => { if (!photo.demo) photo.story = stories.get(photo.id) ?? ""; });
+  }
+  const used = new Set(entries.map((photo) => photo.category));
+  return { photos, pageCount, used: categories.filter((category) => used.has(category)) };
+}
+
+export async function savePhotoOrder(db: D1Database, site: Settings, form: URLSearchParams) {
+  const { entries, order } = await magazineCatalogue(db, site);
+  if (form.get("order_revision") !== order.revision) {
+    throw new HttpError(409, "The photo order changed in another tab. Reload it before saving.");
+  }
+  const ids = form.getAll("publication_photo");
+  const available = new Set(entries.map((photo) => photo.id));
+  if (ids.length !== available.size || new Set(ids).size !== available.size || ids.some((id) => !available.has(id))) {
+    throw new HttpError(409, "The published photos changed. Reload the order before saving.");
+  }
+  const positions = ids.map((id) => Number(form.get(`position_${id}`)));
+  if (positions.some((position) => !Number.isSafeInteger(position) || position < 1 || position > ids.length) ||
+      new Set(positions).size !== positions.length) {
+    throw new HttpError(400, `Give each photo a different position from 1 to ${ids.length}.`);
+  }
+  const ranked = ids.map((id, index) => ({ id, position: positions[index] })).sort((a, b) => a.position - b.position);
+  const value = JSON.stringify({
+    revision: crypto.randomUUID(),
+    ids: [...ranked.map((photo) => photo.id), ...order.ids.filter((id) => !available.has(id))],
+  });
+  const saved = await db.prepare(`INSERT INTO settings (key, value) VALUES ('photo_order', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value = ?`)
+    .bind(value, order.raw).run();
+  if (saved.meta.changes !== 1) throw new HttpError(409, "The photo order changed in another tab. Reload it before saving.");
 }
 
 export async function photosFor(db: D1Database, id: string) {
@@ -84,86 +139,15 @@ export async function readStory(db: D1Database, site: Settings, slug: string, ad
   return { post, photos: await photosFor(db, post.id) };
 }
 
-type Neighbor = Pick<Story, "slug" | "title">;
-export async function neighbors(db: D1Database, post: Story, site: Settings): Promise<[Neighbor | null, Neighbor | null]> {
-  const visibleSamples = site.hide_samples === "1" ? [] : samples;
-  if (post.published_at === null) return [null, null];
-  if (post.demo) {
-    const index = visibleSamples.findIndex((sample) => sample.id === post.id);
-    const newer = index > 0 ? visibleSamples[index - 1] : await db.prepare(
-      "SELECT slug, title FROM posts WHERE published_at IS NOT NULL ORDER BY published_at, id LIMIT 1",
-    ).first<Neighbor>();
-    return [newer, visibleSamples[index + 1] ?? null];
-  }
-  const [newer, older] = await db.batch<Neighbor>([
-    db.prepare(`SELECT slug, title FROM posts WHERE published_at IS NOT NULL AND (published_at, id) > (?, ?)
-      ORDER BY published_at, id LIMIT 1`).bind(post.published_at, post.id),
-    db.prepare(`SELECT slug, title FROM posts WHERE published_at IS NOT NULL AND (published_at, id) < (?, ?)
-      ORDER BY published_at DESC, id DESC LIMIT 1`).bind(post.published_at, post.id),
-  ]);
-  return [newer.results[0] ?? null, older.results[0] ?? visibleSamples[0] ?? null];
-}
-
-export async function approvedComments(db: D1Database, id: string, photoId: string | null, page: number) {
-  const pageSize = 25;
-  const [count, comments] = await db.batch([
-    db.prepare("SELECT count(*) AS total FROM comments WHERE post_id = ? AND photo_id IS ? AND status = 'approved'")
-      .bind(id, photoId),
-    db.prepare(`SELECT * FROM comments WHERE post_id = ? AND photo_id IS ? AND status = 'approved'
-      ORDER BY id DESC LIMIT ? OFFSET ?`).bind(id, photoId, pageSize, (page - 1) * pageSize),
-  ]);
-  const total = Number((count.results[0] as { total: number }).total);
-  return { total, comments: comments.results as Comment[], pages: Math.max(1, Math.ceil(total / pageSize)) };
-}
-
-export async function hasStoryDiscussion(db: D1Database, id: string) {
-  return (await db.prepare(`SELECT 1 FROM comments
-    WHERE post_id = ? AND photo_id IS NULL AND status = 'approved' LIMIT 1`).bind(id).first()) !== null;
-}
-
-export async function addComment(db: D1Database, post: Story, photoId: string, name: string, body: string) {
-  const now = seconds();
-  const statement = post.demo
-    ? db.prepare(`INSERT INTO comments (post_id, photo_id, name, body, created_at) SELECT ?, ?, ?, ?, ?
-        WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'hide_samples' AND value = '1')`)
-      .bind(post.id, photoId, name, body, now)
-    : db.prepare(`INSERT INTO comments (post_id, photo_id, name, body, created_at)
-        SELECT p.id, f.id, ?, ?, ? FROM posts AS p JOIN photos AS f ON f.post_id = p.id
-        WHERE p.id = ? AND f.id = ? AND p.published_at IS NOT NULL`)
-      .bind(name, body, now, post.id, photoId);
-  if ((await statement.run()).meta.changes !== 1) throw new HttpError(404, "This photograph is unavailable.");
-}
-
-type ModerationRow = Comment & {
-  slug: string | null; title: string | null; position: number | null; photo_caption: string | null;
-};
-
-function moderationEntry(item: ModerationRow) {
-  const sample = item.post_id.startsWith(SAMPLE_ID_PREFIX)
-    ? sampleBySlug.get(item.post_id.slice(SAMPLE_ID_PREFIX.length)) : undefined;
-  const samplePosition = sample?.photos.findIndex((photo) => photo.id === item.photo_id) ?? -1;
-  const position = item.position ?? (samplePosition >= 0 ? samplePosition : null);
-  return {
-    ...item, position, slug: item.slug ?? sample?.slug ?? "", title: item.title ?? sample?.title ?? "",
-    photo_caption: item.photo_caption ?? (samplePosition >= 0 ? sample!.photos[samplePosition].caption : ""),
-  };
-}
-
 export async function dashboard(db: D1Database, section: string, view: string, site: Settings) {
   const queries = [
     db.prepare(`SELECT 'published' AS kind, count(*) AS total FROM posts WHERE published_at IS NOT NULL
       UNION ALL SELECT 'draft', count(*) FROM posts WHERE published_at IS NULL
-      UNION ALL SELECT 'pending', count(*) FROM comments WHERE status = 'pending'
       UNION ALL SELECT 'unread', count(*) FROM messages WHERE read_at IS NULL`),
   ];
   if (section === "stories") {
     const condition = view === "published" ? "WHERE p.published_at IS NOT NULL" : view === "draft" ? "WHERE p.published_at IS NULL" : "";
     queries.push(db.prepare(`${coverSQL} ${condition} ORDER BY p.updated_at DESC, p.id DESC`));
-  } else if (section === "comments") {
-    queries.push(db.prepare(`SELECT c.*, p.slug, p.title, f.position, f.caption AS photo_caption
-      FROM comments AS c LEFT JOIN posts AS p ON p.id = c.post_id
-      LEFT JOIN photos AS f ON f.id = c.photo_id AND f.post_id = c.post_id
-      ORDER BY (c.status = 'pending') DESC, c.id DESC`));
   } else if (section === "inbox") {
     queries.push(db.prepare("SELECT * FROM messages ORDER BY id DESC"));
   }
@@ -171,11 +155,10 @@ export async function dashboard(db: D1Database, section: string, view: string, s
   const stats = Object.fromEntries((counts.results as { kind: string; total: number }[]).map((row) => [row.kind, row.total]));
   const shownSamples = site.hide_samples === "1" ? [] : samples;
   return {
-    stats: { published: stats.published + shownSamples.length, draft: stats.draft, pending: stats.pending, unread: stats.unread },
+    stats: { published: stats.published + shownSamples.length, draft: stats.draft, unread: stats.unread },
     cards: section === "stories" ? [
       ...(results.results as CardRow[]).map(card), ...(view === "draft" ? [] : shownSamples),
     ] : [],
-    comments: section === "comments" ? (results.results as ModerationRow[]).map(moderationEntry) : [],
     messages: section === "inbox" ? results.results as import("./types").Message[] : [],
   };
 }
@@ -218,7 +201,8 @@ export async function saveStory(
   const db = env.DB;
   const now = seconds();
   const originals = existing ? await photosFor(db, id) : [];
-  const oldIds = new Set(originals.map((photo) => photo.id));
+  const oldPhotos = new Map(originals.map((photo) => [photo.id, photo]));
+  const oldIds = new Set(oldPhotos.keys());
   const retained = new Set(edits.filter((edit) => !edit.isNew).map((photo) => photo.id));
   if ([...retained].some((photoId) => !oldIds.has(photoId))) throw new HttpError(409, "Reload the editor to see the current photos.");
   const newIds = edits.filter((edit) => edit.isNew).map((photo) => photo.id);
@@ -253,11 +237,17 @@ export async function saveStory(
   statements.push(
     ...removed.map((photoId) => db.prepare(`DELETE FROM photos WHERE id = ? AND post_id = ? AND ${scope}`).bind(photoId, id, id, key)),
     ...edits.map((photo, position) => {
-      if (!photo.isNew) return db.prepare(`UPDATE photos SET position=?, alt=?, caption=? WHERE id=? AND post_id=? AND ${scope}`)
-        .bind(position, photo.alt, photo.caption, photo.id, id, id, key);
+      if (!photo.isNew) {
+        const previous = oldPhotos.get(photo.id)!;
+        const title = photo.title === undefined ? previous.title : photo.title;
+        const story = photo.story === undefined ? previous.story : photo.story;
+        return db.prepare(`UPDATE photos SET position=?, alt=?, caption=?, title=?, story=? WHERE id=? AND post_id=? AND ${scope}`)
+          .bind(position, photo.alt, photo.caption, title ?? null, story ?? null, photo.id, id, id, key);
+      }
       const upload = pending.get(photo.id)!;
-      return db.prepare(`INSERT INTO photos (id, post_id, position, alt, caption, width, height)
-        SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${scope}`).bind(photo.id, id, position, photo.alt, photo.caption, upload.width, upload.height, id, key);
+      return db.prepare(`INSERT INTO photos (id, post_id, position, alt, caption, title, story, width, height)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${scope}`).bind(photo.id, id, position, photo.alt, photo.caption,
+          photo.title ?? null, photo.story ?? null, upload.width, upload.height, id, key);
     }),
     ...newIds.map((photoId) => db.prepare(`DELETE FROM uploads WHERE id = ? AND ${scope}`).bind(photoId, id, key)),
   );

@@ -121,11 +121,11 @@ export async function readBytes(request: Request, limit: number) {
   return result;
 }
 
-export async function readForm(request: Request, env: Bindings, identity: Identity) {
+export async function readForm(request: Request, env: Bindings, identity: Identity, maxBytes = FORM_BYTES) {
   if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(request.headers.get("content-type") ?? "")) {
     throw new HttpError(415, "Use the journal’s form to submit your information.");
   }
-  const data = new URLSearchParams(new TextDecoder().decode(await readBytes(request, FORM_BYTES)));
+  const data = new URLSearchParams(new TextDecoder().decode(await readBytes(request, maxBytes)));
   await verifyForm(request, env, identity, data.get("csrf"));
   return data;
 }
