@@ -1,5 +1,5 @@
-import { tel } from "../security";
-import type { Settings } from "../types";
+import { tel, type Identity } from "../security";
+import { magazineBase, papers, type Settings } from "../types";
 
 const entities: Record<string, string> = {
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -14,20 +14,23 @@ export const trap = '<div class="trap" aria-hidden="true" inert><label>Leave thi
 export const notice = (message: string, error = false) => message
   ? `<p class="notice" role="${error ? "alert" : "status"}">${escape(message)}</p>` : "";
 
-type Active = "home" | "journal" | "contact" | "admin" | "";
-const links = [["home", "/", "Home"], ["journal", "/journal", "Journal"], ["contact", "/contact", "Contact"]];
+export type Active = "home" | "journal" | "photographers" | "contact" | "admin" | "";
 export const arrow = '<span aria-hidden="true">↗</span>';
-const brand = '<a class="brand" href="/" aria-label="Silvergrain home"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word">Silvergrain</span></a>';
 
-export function layout(site: Settings, title: string, active: Active, admin: boolean, content: string, head = "") {
+export function layout(site: Settings, title: string, active: Active, identity: Identity, content: string, head = "") {
+  const base = magazineBase(site), label = escape(site.magazine_title || "Silvergrain");
+  const links = [["home", base || "/", "Home"], ["journal", base + "/journal", "Journal"], ["photographers", "/photographers", "Photographers"], ["contact", base + "/contact", "Contact"]];
+  const brand = `<a class="brand" href="/" aria-label="${label} home"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word">${label}</span></a>`;
+  const account = identity.admin ? ["/admin","Manage"] : identity.member?.status === "approved" ? ["/studio","My studio"] :
+    identity.signedIn ? ["/account","Account"] : ["/login","Sign in"];
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-paper="${escape(site.paper || "cream")}" data-typeface="${escape(site.typeface || "editorial")}" data-spacing="${escape(site.spacing || "spacious")}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Silvergrain, a black-and-white photography magazine by ${escape(site.name)}.">
-  <meta name="theme-color" content="#ffffff">
-  <title>${title ? escape(title) + " · " : ""}Silvergrain</title>
+  <meta name="description" content="${label}, a black-and-white photography magazine by ${escape(site.name)}.">
+  <meta name="theme-color" content="${(papers[site.paper || "cream"] || papers.cream)[1]}">
+  <title>${title ? escape(title) + " · " : ""}${label}</title>
   <link rel="icon" href="/static/favicon.png" type="image/png">
   <link rel="preload" href="/static/fonts/InstrumentSerif-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
@@ -42,14 +45,14 @@ export function layout(site: Settings, title: string, active: Active, admin: boo
       <nav class="site-nav" aria-label="Main navigation">
         ${links.map(([key, href, label]) => `<a href="${href}"${key === active ? ' aria-current="page"' : ""}>${label}</a>`).join("")}
       </nav>
-      <a class="admin-link" href="/admin"${active === "admin" ? ' aria-current="page"' : ""}><span class="lock-icon" aria-hidden="true"></span>${admin ? "Studio" : "Admin"}</a>
+      <a class="admin-link" href="${account[0]}"><span class="lock-icon" aria-hidden="true"></span>${account[1]}</a>
     </div>
   </header>
   <main id="main">${content}</main>
   <footer class="site-footer">
     <div class="shell footer-inner">
       ${brand}<p>© ${new Date().getUTCFullYear()} ${escape(site.name)}</p>
-      <a class="small-link" href="/contact">Contact ${arrow}</a>
+      <a class="small-link" href="${base}/contact">Contact ${arrow}</a>
     </div>
   </footer>
 </body>

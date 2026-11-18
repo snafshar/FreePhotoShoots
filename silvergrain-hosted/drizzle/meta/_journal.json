@@ -29,6 +29,13 @@
       "when": 1795012363485,
       "tag": "0003_individual_photo_stories",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795031621303,
+      "tag": "0004_contributor_accounts",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import { samples, sampleBySlug } from "./demo";
-import { HttpError, seconds } from "./security";
+import { HttpError, seconds, writerAllowed, writerArgs, type Identity } from "./security";
 import type { Bindings, Card, MagazinePhoto, Photo, Settings, Story, StoryInput } from "./types";
 
 export const categories = ["Landscape", "Architecture", "Street", "Portrait", "Seascape", "Other"];
@@ -8,9 +8,9 @@ export const maxPhotoBytes = 6 * 1024 * 1024;
 export const maxPhotoSide = 1920;
 const pendingHours = 24 * 60 * 60;
 export const storyIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-const coverSQL = `SELECT p.*, f.id AS photo_id, f.alt, f.caption AS photo_caption, f.width, f.height,
+const coverSQL = `SELECT p.*, c.handle AS author_handle, f.id AS photo_id, f.alt, f.caption AS photo_caption, f.width, f.height,
     (SELECT count(*) FROM photos WHERE post_id = p.id) AS photo_count
-  FROM posts AS p LEFT JOIN photos AS f ON f.id =
+  FROM posts AS p LEFT JOIN contributors c ON c.id=p.owner_id LEFT JOIN photos AS f ON f.id =
     (SELECT id FROM photos WHERE post_id = p.id ORDER BY position, id LIMIT 1)`;
 
 type CardRow = Story & {
@@ -34,7 +34,7 @@ export function photoPageUrl(slug: string, photoId: string) {
 }
 
 export async function settings(db: D1Database): Promise<Settings> {
-  const { results } = await db.prepare("SELECT key, value FROM settings WHERE key IN ('name','email','phone','hide_samples')")
+  const { results } = await db.prepare("SELECT key, value FROM settings WHERE key IN ('name','email','phone','hide_samples','magazine_title','paper','typeface','spacing','applications')")
     .all<{ key: string; value: string }>();
   return Object.assign({ name: "Sina Afshar", email: "", phone: "", hide_samples: "0" }, Object.fromEntries(
     results.map(({ key, value }) => [key, value]),
@@ -51,8 +51,10 @@ export const photosPerPage = 10;
 
 type PhotoOrder = { revision: string; ids: string[] };
 
-async function photoOrder(db: D1Database) {
-  const raw = await db.prepare("SELECT value FROM settings WHERE key = 'photo_order'").first<string>("value") ?? "";
+const orderKey = (site: Settings) => site.owner_id ? "photo_order:" + site.owner_id : "photo_order";
+
+async function photoOrder(db: D1Database, site: Settings) {
+  const raw = await db.prepare("SELECT value FROM settings WHERE key = ?").bind(orderKey(site)).first<string>("value") ?? "";
   const parsed: PhotoOrder = raw ? JSON.parse(raw) : { revision: "", ids: [] };
   return { raw, ...parsed };
 }
@@ -71,12 +73,12 @@ export async function magazineCatalogue(db: D1Database, site: Settings) {
     db.prepare(`SELECT f.id, f.post_id, f.alt, f.caption, f.width, f.height, p.slug,
         COALESCE(NULLIF(f.title, ''), p.title) AS title, p.category, p.location, p.photo_date
       FROM photos AS f JOIN posts AS p ON p.id = f.post_id
-      WHERE p.published_at IS NOT NULL ORDER BY p.published_at DESC, p.id DESC, f.position, f.id`).all<MagazinePhoto>(),
-    photoOrder(db),
+      WHERE p.owner_id IS ? AND p.published_at IS NOT NULL ORDER BY p.published_at DESC, p.id DESC, f.position, f.id`).bind(site.owner_id ?? null).all<MagazinePhoto>(),
+    photoOrder(db, site),
   ]);
   const entries = [...result.results, ...samplePhotos(site)];
   const ranks = new Map(order.ids.map((id, position) => [id, position]));
-  entries.sort((a, b) => (ranks.get(a.id) ?? entries.length) - (ranks.get(b.id) ?? entries.length));
+  entries.sort((a, b) => (ranks.get(a.id) ?? order.ids.length) - (ranks.get(b.id) ?? order.ids.length));
   return { entries, order };
 }
 
@@ -90,8 +92,8 @@ export async function magazinePage(db: D1Database, site: Settings, category: str
   if (owned.length) {
     const texts = await db.prepare(`SELECT f.id, COALESCE(f.story, p.story) AS story
       FROM photos AS f JOIN posts AS p ON p.id = f.post_id
-      WHERE p.published_at IS NOT NULL AND f.id IN (${owned.map(() => "?").join(",")})`)
-      .bind(...owned.map((photo) => photo.id)).all<{ id: string; story: string }>();
+      WHERE p.owner_id IS ? AND p.published_at IS NOT NULL AND f.id IN (${owned.map(() => "?").join(",")})`)
+      .bind(site.owner_id ?? null, ...owned.map((photo) => photo.id)).all<{ id: string; story: string }>();
     const stories = new Map(texts.results.map((item) => [item.id, item.story]));
     photos.forEach((photo) => { if (!photo.demo) photo.story = stories.get(photo.id) ?? ""; });
   }
@@ -99,7 +101,7 @@ export async function magazinePage(db: D1Database, site: Settings, category: str
   return { photos, pageCount, used: categories.filter((category) => used.has(category)) };
 }
 
-export async function savePhotoOrder(db: D1Database, site: Settings, form: URLSearchParams) {
+export async function savePhotoOrder(db: D1Database, site: Settings, form: URLSearchParams, actor: Identity) {
   const { entries, order } = await magazineCatalogue(db, site);
   if (form.get("order_revision") !== order.revision) {
     throw new HttpError(409, "The photo order changed in another tab. Reload it before saving.");
@@ -119,9 +121,9 @@ export async function savePhotoOrder(db: D1Database, site: Settings, form: URLSe
     revision: crypto.randomUUID(),
     ids: [...ranked.map((photo) => photo.id), ...order.ids.filter((id) => !available.has(id))],
   });
-  const saved = await db.prepare(`INSERT INTO settings (key, value) VALUES ('photo_order', ?)
+  const saved = await db.prepare(`INSERT INTO settings (key, value) SELECT ?, ? WHERE ${writerAllowed}
     ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE settings.value = ?`)
-    .bind(value, order.raw).run();
+    .bind(orderKey(site), value, ...writerArgs(actor), order.raw).run();
   if (saved.meta.changes !== 1) throw new HttpError(409, "The photo order changed in another tab. Reload it before saving.");
 }
 
@@ -133,34 +135,40 @@ export async function photosFor(db: D1Database, id: string) {
 export async function readStory(db: D1Database, site: Settings, slug: string, admin: boolean) {
   const sample = site.hide_samples !== "1" ? sampleBySlug.get(slug) : undefined;
   if (sample) return { post: sample as Story, photos: sample.photos };
-  const post = await db.prepare("SELECT * FROM posts WHERE slug = ? AND (published_at IS NOT NULL OR ? = 1)")
-    .bind(slug, admin ? 1 : 0).first<Story>();
+  const post = await db.prepare("SELECT * FROM posts WHERE slug = ? AND owner_id IS ? AND (published_at IS NOT NULL OR ? = 1)")
+    .bind(slug, site.owner_id ?? null, admin ? 1 : 0).first<Story>();
   if (!post) return null;
   return { post, photos: await photosFor(db, post.id) };
 }
 
-export async function dashboard(db: D1Database, section: string, view: string, site: Settings) {
-  const queries = [
-    db.prepare(`SELECT 'published' AS kind, count(*) AS total FROM posts WHERE published_at IS NOT NULL
-      UNION ALL SELECT 'draft', count(*) FROM posts WHERE published_at IS NULL
-      UNION ALL SELECT 'unread', count(*) FROM messages WHERE read_at IS NULL`),
-  ];
+export async function dashboard(db: D1Database, section: string, view: string, site: Settings, all: boolean, page: number) {
+  const scope = [Number(all), site.owner_id ?? null], size = 25, offset = (page - 1) * size;
+  const queries = [db.prepare(`SELECT 'published' AS kind, count(*) AS total FROM posts WHERE published_at IS NOT NULL AND (?=1 OR owner_id IS ?)
+    UNION ALL SELECT 'draft', count(*) FROM posts WHERE published_at IS NULL AND (?=1 OR owner_id IS ?)
+    UNION ALL SELECT 'inbox', count(*) FROM messages WHERE (?=1 OR owner_id IS ?)
+    UNION ALL SELECT 'unread', count(*) FROM messages WHERE read_at IS NULL AND (?=1 OR owner_id IS ?)
+    UNION ALL SELECT 'requests', count(*) FROM contributors WHERE status='pending' AND ?=1`)
+    .bind(...scope, ...scope, ...scope, ...scope, Number(all))];
   if (section === "stories") {
-    const condition = view === "published" ? "WHERE p.published_at IS NOT NULL" : view === "draft" ? "WHERE p.published_at IS NULL" : "";
-    queries.push(db.prepare(`${coverSQL} ${condition} ORDER BY p.updated_at DESC, p.id DESC`));
+    const filter = view === "draft" ? " AND p.published_at IS NULL" : view === "published" ? " AND p.published_at IS NOT NULL" : "";
+    queries.push(db.prepare(`${coverSQL} WHERE (?=1 OR p.owner_id IS ?)${filter} ORDER BY p.updated_at DESC, p.id DESC LIMIT ? OFFSET ?`).bind(...scope, size, offset));
   } else if (section === "inbox") {
-    queries.push(db.prepare("SELECT * FROM messages ORDER BY id DESC"));
+    queries.push(db.prepare(`SELECT m.*, c.handle AS author_handle FROM messages m LEFT JOIN contributors c ON c.id=m.owner_id
+      WHERE (?=1 OR m.owner_id IS ?) ORDER BY m.id DESC LIMIT ? OFFSET ?`).bind(...scope, size, offset));
   }
-  const [counts, results] = await db.batch(queries);
-  const stats = Object.fromEntries((counts.results as { kind: string; total: number }[]).map((row) => [row.kind, row.total]));
-  const shownSamples = site.hide_samples === "1" ? [] : samples;
-  return {
-    stats: { published: stats.published + shownSamples.length, draft: stats.draft, unread: stats.unread },
-    cards: section === "stories" ? [
-      ...(results.results as CardRow[]).map(card), ...(view === "draft" ? [] : shownSamples),
-    ] : [],
-    messages: section === "inbox" ? results.results as import("./types").Message[] : [],
-  };
+  const [counts, rows] = await db.batch(queries);
+  const stats = Object.fromEntries((counts.results as {kind: string; total: number}[]).map(row => [row.kind, row.total]));
+  const samplesForSite = site.hide_samples === "1" ? [] : samples;
+  const tail = view === "draft" ? [] : samplesForSite;
+  const count = view === "all" ? stats.draft + stats.published : stats[view];
+  const total = section === "stories" ? count + tail.length : section === "inbox" ? stats.inbox : 0;
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (page > pages) throw new HttpError(404, "This page is unavailable.");
+  const cards = section === "stories" ? (rows.results as CardRow[]).map(card) : [];
+  const start = Math.max(0, offset - count);
+  if (section === "stories") cards.push(...tail.slice(start, start + size - cards.length));
+  return { stats: {...stats, published: stats.published + samplesForSite.length, draft: stats.draft, unread: stats.unread, requests: stats.requests},
+    cards, page, pages, messages: section === "inbox" ? rows.results as import("./types").Message[] : [] };
 }
 
 export function photoKeys(id: string) {
@@ -177,16 +185,20 @@ export async function clearExpiredUploads(env: Bindings) {
   await env.DB.batch(expired.results.map(({ id }) => env.DB.prepare("DELETE FROM uploads WHERE id = ? AND expires <= ?").bind(id, now)));
 }
 
-export async function registerUpload(env: Bindings, postId: string, id: string, width: number, height: number) {
-  await env.DB.prepare("INSERT INTO uploads (id, post_id, width, height, expires) VALUES (?, ?, ?, ?, ?)")
-    .bind(id, postId, width, height, seconds() + pendingHours).run();
+export async function registerUpload(env: Bindings, actor: Identity, postId: string, id: string, width: number, height: number) {
+  const now = seconds();
+  const result = await env.DB.prepare(`INSERT INTO uploads (id,post_id,width,height,expires,uploader_id)
+    SELECT ?,?,?,?,?,? WHERE ${writerAllowed} AND (SELECT count(*) FROM uploads WHERE uploader_id=? AND expires>?) < 50`)
+    .bind(id, postId, width, height, now + pendingHours, actor.id, ...writerArgs(actor), actor.id, now).run();
+  if (!result.meta.changes) throw new HttpError(409, "Finish your open uploads or reload your studio.");
 }
 
-export async function pendingFor(db: D1Database, postId: string, ids: string[]) {
+const validUploader = "(uploader_id=? OR (?=1 AND uploader_id IS NULL))";
+export async function pendingFor(db: D1Database, postId: string, ids: string[], actor: Identity) {
   if (!ids.length) return new Map<string, Pending>();
-  const result = await db.prepare(`SELECT * FROM uploads WHERE post_id = ? AND expires > ?
-    AND id IN (${ids.map(() => "?").join(",")})`).bind(postId, seconds(), ...ids).all<Pending>();
-  return new Map(result.results.map((row) => [row.id, row]));
+  const result = await db.prepare(`SELECT * FROM uploads WHERE post_id=? AND expires>? AND ${validUploader}
+    AND id IN (${ids.map(() => "?").join(",")})`).bind(postId, seconds(), actor.id, Number(actor.admin), ...ids).all<Pending>();
+  return new Map(result.results.map(row => [row.id, row]));
 }
 
 function slugFor(title: string, id: string) {
@@ -196,7 +208,7 @@ function slugFor(title: string, id: string) {
 }
 
 export async function saveStory(
-  env: Bindings, id: string, existing: Story | null, values: StoryInput, intent: string, edits: SavePhoto[],
+  env: Bindings, id: string, existing: Story | null, values: StoryInput, intent: string, edits: SavePhoto[], actor: Identity, targetOwner?: string,
 ) {
   const db = env.DB;
   const now = seconds();
@@ -206,7 +218,7 @@ export async function saveStory(
   const retained = new Set(edits.filter((edit) => !edit.isNew).map((photo) => photo.id));
   if ([...retained].some((photoId) => !oldIds.has(photoId))) throw new HttpError(409, "Reload the editor to see the current photos.");
   const newIds = edits.filter((edit) => edit.isNew).map((photo) => photo.id);
-  const pending = await pendingFor(db, id, newIds);
+  const pending = await pendingFor(db, id, newIds, actor);
   if (pending.size !== newIds.length) throw new HttpError(409, "Select any expired or missing uploads again.");
   let published = existing?.published_at ?? null;
   if (intent === "draft") published = null;
@@ -214,19 +226,20 @@ export async function saveStory(
   if (published !== null && !edits.length) throw new HttpError(400, "Add at least one photo before publishing.");
 
   const key = crypto.randomUUID();
+  const owner = actor.admin ? existing?.owner_id ?? targetOwner ?? null : actor.member!.id;
   const fields = [values.title, values.caption, values.story, values.category, values.location, values.photo_date, published, now];
   // Recheck pending rows in the transaction. Each metadata mutation is scoped to
   // the request that actually won the revision check.
   const validPending = newIds.length ? ` AND (SELECT count(*) FROM uploads WHERE post_id = ? AND expires > ?
-    AND id IN (${newIds.map(() => "?").join(",")})) = ?` : "";
-  const pendingArgs = newIds.length ? [id, now, ...newIds, newIds.length] : [];
+    AND ${validUploader} AND id IN (${newIds.map(() => "?").join(",")})) = ?` : "";
+  const pendingArgs = newIds.length ? [id, now, actor.id, Number(actor.admin), ...newIds, newIds.length] : [];
   const start = existing
     ? db.prepare(`UPDATE posts SET title=?, caption=?, story=?, category=?, location=?, photo_date=?, published_at=?,
-        updated_at=?, write_token=?, revision=revision+1 WHERE id=? AND revision=?${validPending}`)
-      .bind(...fields, key, id, existing.revision, ...pendingArgs)
-    : db.prepare(`INSERT INTO posts (id, slug, title, caption, story, category, location, photo_date, published_at, updated_at, write_token)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE 1=1${validPending} ON CONFLICT(id) DO NOTHING`)
-      .bind(id, slugFor(values.title, id), ...fields, key, ...pendingArgs);
+        updated_at=?, write_token=?, revision=revision+1 WHERE id=? AND revision=? AND owner_id IS ? AND ${writerAllowed}${validPending}`)
+      .bind(...fields, key, id, existing.revision, owner, ...writerArgs(actor), ...pendingArgs)
+    : db.prepare(`INSERT INTO posts (id, slug, title, caption, story, category, location, photo_date, published_at, updated_at, write_token, owner_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${writerAllowed}${validPending} ON CONFLICT(id) DO NOTHING`)
+      .bind(id, slugFor(values.title, id), ...fields, key, owner, ...writerArgs(actor), ...pendingArgs);
   const scope = "EXISTS (SELECT 1 FROM posts WHERE id = ? AND write_token = ?)";
   const removed = originals.filter((photo) => !retained.has(photo.id)).map((photo) => photo.id);
   const statements = [start];
@@ -256,13 +269,14 @@ export async function saveStory(
   return removed;
 }
 
-export async function deleteStory(db: D1Database, id: string, revision: number) {
+export async function deleteStory(db: D1Database, id: string, revision: number, actor: Identity) {
   const originals = await photosFor(db, id);
+  const allowed = `id=? AND revision=? AND (?=1 OR owner_id=?) AND ${writerAllowed}`;
+  const args = [id, revision, Number(actor.admin), actor.member?.id ?? null, ...writerArgs(actor)];
   const [, deleted] = await db.batch([
-    db.prepare(`DELETE FROM comments WHERE post_id = ? AND EXISTS
-      (SELECT 1 FROM posts WHERE id = ? AND revision = ?)`).bind(id, id, revision),
-    db.prepare("DELETE FROM posts WHERE id = ? AND revision = ?").bind(id, revision),
+    db.prepare(`DELETE FROM comments WHERE post_id=? AND EXISTS (SELECT 1 FROM posts WHERE ${allowed})`).bind(id, ...args),
+    db.prepare(`DELETE FROM posts WHERE ${allowed}`).bind(...args),
   ]);
   if (!deleted.meta.changes) throw new HttpError(409, "This story changed before it could be deleted.");
-  return originals.map((photo) => photo.id);
+  return originals.map(photo => photo.id);
 }

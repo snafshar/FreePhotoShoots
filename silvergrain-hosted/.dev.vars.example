@@ -1,2 +1,6 @@
 SILVERGRAIN_ADMIN_EMAIL=your-chatgpt-email@example.com
 SILVERGRAIN_FORM_SECRET=replace-with-at-least-32-random-characters
+# Optional deployment-managed approval sender
+# RESEND_API_KEY=
+# SILVERGRAIN_EMAIL_FROM=
+# SILVERGRAIN_PUBLIC_ORIGIN=https://silvergrain.afsharsn.chatgpt.site

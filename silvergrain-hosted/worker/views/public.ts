@@ -2,9 +2,9 @@ import { photoPageUrl, photoUrl } from "../data";
 import type { MagazinePhoto, Settings, Story } from "../types";
 import { arrow, emailLink, escape as e, hidden, notice, pager, phoneLink, trap } from "./layout";
 
-function photoSpread(photo: MagazinePhoto, index: number, detail = false) {
+function photoSpread(photo: MagazinePhoto, index: number, detail = false, prefix = "") {
   const titleTag = detail ? "h1" : "h2";
-  const url = photoPageUrl(photo.slug, photo.id);
+  const url = prefix + photoPageUrl(photo.slug, photo.id);
   const facts = [photo.location, photo.demo ? "Sample" : ""].filter(Boolean);
   return `<article class="magazine-spread" id="photo-${photo.id}" data-magazine-photo="${photo.id}" data-page-touch>
     <section class="magazine-photograph" aria-label="${e(photo.title)}" data-gallery>
@@ -36,34 +36,36 @@ type Magazine = {
 
 export function magazineView(input: Magazine) {
   const { photos, site, page, pageCount, categories, category, journal } = input;
-  const base = journal ? "/journal" : "/";
+  const prefix = site.handle ? "/" + site.handle : "";
+  const base = journal ? prefix + "/journal" : prefix || "/";
   const query = category ? `?category=${encodeURIComponent(category)}` : "";
-  const path = (number: number) => (number === 1 ? base : journal ? `/journal/page/${number}` : `/page/${number}`) + query;
+  const path = (number: number) => (number === 1 ? base : journal ? `${prefix}/journal/page/${number}` : `${prefix}/page/${number}`) + query;
   return `<div class="shell magazine-page" data-paged>
     <header class="magazine-heading">
-      <div><h1>${journal ? "Journal" : "Silvergrain"}</h1><p>Photography by ${e(site.name)}</p></div>
+      <div><h1>${journal ? "Journal" : e(site.handle ? site.name : site.magazine_title || "Silvergrain")}</h1>
+        ${site.handle && !journal ? `<p>@${e(site.handle)}${site.location ? " · " + e(site.location) : ""}</p>${site.bio ? `<div class="profile-bio prose">${e(site.bio)}</div>` : ""}` : `<p>Photography by ${e(site.name)}</p>`}</div>
       ${journal && categories.length > 1 ? `<nav class="filters" aria-label="Filter by category">
-        <a class="filter" href="/journal"${category ? "" : ' aria-current="true"'}>All</a>
-        ${categories.map((item) => `<a class="filter" href="/journal?category=${encodeURIComponent(item)}"${item === category ? ' aria-current="true"' : ""}>${e(item)}</a>`).join("")}
+        <a class="filter" href="${prefix}/journal"${category ? "" : ' aria-current="true"'}>All</a>
+        ${categories.map((item) => `<a class="filter" href="${prefix}/journal?category=${encodeURIComponent(item)}"${item === category ? ' aria-current="true"' : ""}>${e(item)}</a>`).join("")}
       </nav>` : ""}
     </header>
-    ${photos.length ? photos.map((photo, index) => photoSpread(photo, index)).join("")
+    ${photos.length ? photos.map((photo, index) => photoSpread(photo, index, false, prefix)).join("")
       : '<p class="empty">Published photographs will appear here.</p>'}
     ${pager(page, pageCount, path, "Magazine pages", true)}
   </div>`;
 }
 
-export function storyView(post: Story, photo: MagazinePhoto | undefined, adjacent: [MagazinePhoto | null, MagazinePhoto | null]) {
+export function storyView(post: Story, photo: MagazinePhoto | undefined, adjacent: [MagazinePhoto | null, MagazinePhoto | null], prefix = "") {
   const [previous, next] = adjacent;
   return `<div class="shell magazine-detail" data-paged>
     <div class="detail-top">
-      <a class="small-link" href="/">← Magazine</a>
+      <a class="small-link" href="${prefix || "/"}">← Magazine</a>
       ${post.published_at === null ? '<span class="eyebrow">Draft preview</span>' : ""}
     </div>
-    ${photo ? photoSpread(photo, 0, true) : `<h1 class="draft-heading">${e(post.title)}</h1>`}
+    ${photo ? photoSpread(photo, 0, true, prefix) : `<h1 class="draft-heading">${e(post.title)}</h1>`}
     ${previous || next ? `<nav class="story-nav" aria-label="Browse photographs" data-page-touch>
-      ${previous ? `<a href="${photoPageUrl(previous.slug, previous.id)}" data-page-prev><span class="eyebrow">← Previous</span><span class="neighbor-title">${e(previous.title)}</span></a>` : "<span></span>"}
-      ${next ? `<a href="${photoPageUrl(next.slug, next.id)}" data-page-next><span class="eyebrow">Next →</span><span class="neighbor-title">${e(next.title)}</span></a>` : "<span></span>"}
+      ${previous ? `<a href="${prefix}${photoPageUrl(previous.slug, previous.id)}" data-page-prev><span class="eyebrow">← Previous</span><span class="neighbor-title">${e(previous.title)}</span></a>` : "<span></span>"}
+      ${next ? `<a href="${prefix}${photoPageUrl(next.slug, next.id)}" data-page-next><span class="eyebrow">Next →</span><span class="neighbor-title">${e(next.title)}</span></a>` : "<span></span>"}
     </nav>` : ""}
   </div>`;
 }
@@ -85,7 +87,8 @@ export function contactView(site: Settings, input: ContactForm) {
     <section class="intro"><h1>Contact me</h1>${details}</section>
     <section class="contact-card" id="contact-form" aria-labelledby="message-heading">
       <h2 id="message-heading">Send a message</h2>
-      <form class="form" method="post" action="/contact#contact-form">
+      ${site.owner_id ? `<p class="muted">Your message goes to ${e(site.name)} and is visible to the site editor.</p>` : ""}
+      <form class="form" method="post" action="${site.handle ? "/" + site.handle : ""}/contact#contact-form">
         ${hidden("csrf", csrf)}${trap}
         ${notice(input.sent ? "Your message was sent." : "")}${notice(input.error ?? "", true)}
         <div class="field-row">

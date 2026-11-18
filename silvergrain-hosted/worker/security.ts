@@ -1,4 +1,4 @@
-import type { Bindings } from "./types";
+import type { Bindings, Member } from "./types";
 
 const textEncoder = new TextEncoder();
 const CSRF_TTL = 12 * 60 * 60;
@@ -7,7 +7,7 @@ const FORM_BYTES = 80 * 1024;
 const keyCache = new WeakMap<object, Promise<CryptoKey>>();
 
 export const seconds = () => Math.floor(Date.now() / 1000);
-export const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value) && value.length <= 254;
+export const validEmail = (value: string) => /^[^\s@<>,;:\\"\x00-\x1f\x7f]+@[^\s@<>,;:\\"\x00-\x1f\x7f]+\.[^\s@<>,;:\\"\x00-\x1f\x7f]+$/u.test(value) && value.length <= 254;
 export const validPhone = (value: string) => /^\+?[0-9(). -]{3,30}$/.test(value) && (value.match(/[0-9]/g)?.length ?? 0) >= 3;
 export const tel = (value: string) => (value.startsWith("+") ? "+" : "") + value.replace(/\D/g, "");
 
@@ -15,21 +15,26 @@ export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-export type Identity = { admin: boolean; signedIn: boolean; id: string };
+export type Identity = { admin: boolean; signedIn: boolean; id: string; email?: string; member?: Member | null };
 
 export async function identify(request: Request, env: Bindings): Promise<Identity> {
-  const id = request.headers.get("oai-authenticated-user-id") ?? "";
+  const id = request.headers.get("oai-authenticated-user-id") || "";
   const email = request.headers.get("oai-authenticated-user-email")?.trim().toLowerCase();
-  const allowed = env.SILVERGRAIN_ADMIN_EMAIL?.trim().toLowerCase();
-  if (!id || !email) return { admin: false, signedIn: false, id: "" };
-  if (env.SILVERGRAIN_ADMIN_ID) {
-    return { admin: id === env.SILVERGRAIN_ADMIN_ID, signedIn: true, id };
+  if (!id || !email || !validEmail(email)) return { admin: false, signedIn: false, id: "" };
+  let owner = env.SILVERGRAIN_ADMIN_ID;
+  if (!owner) {
+    if (email === env.SILVERGRAIN_ADMIN_EMAIL?.trim().toLowerCase()) {
+      await env.DB.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES ('admin_site_user_id',?)").bind(id).run();
+    }
+    owner = await env.DB.prepare("SELECT value FROM settings WHERE key='admin_site_user_id'").first<string>("value") ?? undefined;
   }
-  if (!allowed || email !== allowed) return { admin: false, signedIn: true, id };
-  await env.DB.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_site_user_id', ?)").bind(id).run();
-  const storedId = await env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_site_user_id'").first<string>("value");
-  return { admin: id === storedId, signedIn: true, id };
+  if (id === owner) return { admin: true, signedIn: true, id, email };
+  const member = await env.DB.prepare("SELECT * FROM contributors WHERE site_user_id=?").bind(id).first<Member>();
+  return { admin: false, signedIn: true, id, email, member };
 }
+export const approvedMember = (actor: Identity) => actor.member?.status === "approved" ? actor.member : null;
+export const writerAllowed = "(?=1 OR EXISTS (SELECT 1 FROM contributors WHERE id=? AND site_user_id=? AND status='approved'))";
+export const writerArgs = (actor: Identity) => [Number(actor.admin), actor.member?.id ?? null, actor.id];
 
 async function signature(env: Bindings, purpose: string, value: string) {
   const secret = env.SILVERGRAIN_FORM_SECRET;
@@ -81,7 +86,8 @@ export async function formToken(request: Request, env: Bindings, identity: Ident
 
 export async function verifyForm(request: Request, env: Bindings, identity: Identity, provided: unknown) {
   const stored = cookieValue(request);
-  if (
+  const origin = request.headers.get("origin");
+  if ((origin !== null && origin !== new URL(request.url).origin) ||
     ["cross-site", "same-site"].includes(request.headers.get("sec-fetch-site") ?? "") ||
     typeof provided !== "string" || !equal(stored, provided) || !(await validToken(env, identity, stored))
   ) {

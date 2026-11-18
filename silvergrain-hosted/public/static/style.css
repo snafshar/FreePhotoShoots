@@ -251,3 +251,41 @@ img { display: block; max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+html[data-paper="white"] { --paper: #fff; }
+html[data-paper="linen"] { --paper: #ede9df; }
+html[data-paper="mist"] { --paper: #eef1ef; }
+html[data-typeface="classic"] { --display: Georgia, "Times New Roman", serif; }
+html[data-typeface="modern"] { --display: Inter, system-ui, sans-serif; }
+html[data-spacing="compact"] .magazine-spread { padding-bottom: 2rem; margin-bottom: 2rem; }
+.studio :is(p, a, summary, .check), .account-page .field, .people-search .field { overflow-wrap: anywhere; }
+.account-page { max-width: 40rem; margin-block: clamp(3rem, 8vw, 7rem); }
+.account-page h1 { line-height: 1.02; }
+.account-intro, .profile-bio { max-width: 48ch; margin: 1.2rem 0 1.75rem; font-size: 1.05rem; }
+.account-actions { display: flex; flex-wrap: wrap; gap: .75rem 1.1rem; align-items: center; margin-block: 1.25rem; }
+.account-page form { margin-block: 1.5rem; }
+.manage-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(1.5rem, 6vw, 6rem); margin: 1.5rem 0 3rem; }
+.manage-columns h2 { margin-bottom: .8rem; }
+.manage-columns form.form { margin-block: 1.3rem; }
+.people-search { display: grid; grid-template-columns: minmax(10rem, 2fr) minmax(8rem, 1fr) auto; gap: .8rem; align-items: end; margin-block: 1.5rem; }
+.people-list, .directory-list { list-style: none; padding: 0; margin: 1rem 0 3rem; }
+.people-list li, .directory-list a { display: flex; align-items: center; gap: 1.25rem; border-top: 1px solid var(--line); padding: 1rem 0; }
+.people-list li { justify-content: space-between; }
+.person-name, .directory-list strong { font: 400 1.7rem/1.2 var(--display); }
+.directory-list small { display: block; margin-top: .4rem; color: var(--muted); }
+.directory-list img { width: 6rem; height: 4.25rem; object-fit: cover; filter: grayscale(1); }
+.mail-row, .manage-columns details { margin-block: 1rem; padding-top: .85rem; border-top: 1px solid var(--line); }
+.mail-row form { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-top: .75rem; }
+.manage-columns summary { cursor: pointer; margin-bottom: .65rem; }
+.studio-nav { display: flex; flex-wrap: wrap; }
+.studio-nav a, .site-nav a, .admin-link { min-height: 2.75rem; font-size: .875rem; }
+.account-page .field small { color: var(--muted); font-size: .85rem; }
+@media (max-width: 700px) {
+  .manage-columns { grid-template-columns: 1fr; }
+  .header-inner { grid-template-columns: 1fr auto; gap: 0 1rem; padding-top: .25rem; }
+  .site-header .brand-word { display: inline; }
+  .site-nav { grid-column: 1/-1; grid-row: 2; justify-content: start; gap: clamp(.65rem, 5vw, 1.5rem); }
+  .site-nav a, .admin-link { font-size: .875rem; }
+  .admin-link { grid-column: 2; grid-row: 1; }
+  .people-search { grid-template-columns: 1fr; }
+}

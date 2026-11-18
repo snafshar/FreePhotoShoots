@@ -1,7 +1,7 @@
 import { categories, maxPhotos, photoPageUrl, photoUrl } from "../data";
 import type { dashboard, EditPhoto } from "../data";
 import type { MagazinePhoto, Photo, Settings, Story, StoryInput } from "../types";
-import { arrow, dateLabel, emailLink, escape as e, hidden, notice } from "./layout";
+import { arrow, dateLabel, emailLink, escape as e, hidden, notice, pager } from "./layout";
 
 export function signIn(signedIn: boolean) {
   return `<section class="shell narrow-page">
@@ -12,37 +12,43 @@ export function signIn(signedIn: boolean) {
   </section>`;
 }
 
-const sections = [
-  ["stories", "/admin", "Stories"], ["order", "/admin/order", "Photo order"],
-  ["inbox", "/admin/inbox", "Inbox"], ["settings", "/admin/settings", "Settings"],
-];
-
-function studioNavigation(section: string, unread = 0) {
-  return sections.map(([key, url, label]) => `<a href="${url}"${key === section ? ' aria-current="page"' : ""}>${label}${key === "inbox" && unread ? ` <span>${unread}</span>` : ""}</a>`).join("");
+export type Desk = "/admin" | "/studio";
+export function studioNavigation(section: string, desk: Desk, unread = 0) {
+  const tabs = desk === "/admin" ? [["stories","","All stories"],["users","/users","People"],["order","/order","Photo order"],
+    ["inbox","/inbox","Inbox"],["appearance","/appearance","Appearance"],["settings","/settings","Contact details"],["email","/email","Email"]]
+    : [["stories","","My stories"],["order","/order","Photo order"],["profile","/profile","Profile"],["inbox","/inbox","Inbox"]];
+  return tabs.map(([key,path,label]) => `<a href="${desk}${path}"${key === section ? ' aria-current="page"' : ""}>${label}${key === "inbox" && unread ? ` <span>${unread}</span>` : ""}</a>`).join("");
 }
 
 export function dashboardView(
   state: Awaited<ReturnType<typeof dashboard>>, section: string, view: string, site: Settings,
-  csrf: string, message: string, error = "",
+  csrf: string, message: string, error = "", desk: Desk = "/admin",
 ) {
   const { stats, cards, messages } = state;
-  const nav = studioNavigation(section, stats.unread);
+  const nav = studioNavigation(section, desk, stats.unread);
   const filters = [["all", "All"], ["published", `Published ${stats.published}`], ["draft", `Drafts ${stats.draft}`]];
+  const context = desk === "/admin" && site.owner_id ? "?author=" + site.owner_id : "";
+  const listUrl = (filter: string, page = 1) => {
+    const params = new URLSearchParams(context);
+    if (section === "stories" && filter !== "all") params.set("view",filter);
+    if (page > 1) params.set("page",String(page));
+    return desk + (section === "inbox" ? "/inbox" : "") + (params.size ? "?" + params : "");
+  };
   let content = "";
   if (section === "stories") {
     content = `<div class="dashboard-content">
       <div class="section-heading studio-section-heading"><h2>Stories</h2>
         <nav class="filters" aria-label="Filter your stories">
-          ${filters.map(([filter, label]) => `<a class="filter" href="/admin${filter === "all" ? "" : `?view=${filter}`}"${filter === view ? ' aria-current="true"' : ""}>${label}</a>`).join("")}
+          ${filters.map(([filter, label]) => `<a class="filter" href="${e(listUrl(filter))}"${filter === view ? ' aria-current="true"' : ""}>${label}</a>`).join("")}
         </nav>
       </div>
       <ul class="studio-list">
         ${cards.length ? cards.map((entry) => {
-          const href = entry.demo ? `/stories/${entry.slug}` : `/admin/stories/${entry.id}`;
+          const href = entry.demo ? `/stories/${entry.slug}` : `${desk}/stories/${entry.id}`;
           const label = entry.demo ? "View" : "Edit";
           return `<li class="studio-row">
             <div class="studio-thumb">${entry.photo ? `<img src="${photoUrl(entry.photo, true)}" alt="" loading="lazy">` : ""}</div>
-            <div class="studio-entry"><a href="${href}">${e(entry.title)}</a><p>${e(entry.category)} / ${entry.photo_count} ${entry.photo_count === 1 ? "photo" : "photos"}</p></div>
+            <div class="studio-entry"><a href="${href}">${e(entry.title)}</a><p>${entry.author_handle ? "@" + e(entry.author_handle) + " / " : ""}${e(entry.category)} / ${entry.photo_count} ${entry.photo_count === 1 ? "photo" : "photos"}</p></div>
             <span class="entry-state${entry.published_at !== null ? " published" : ""}">${entry.demo ? "Sample" : entry.published_at !== null ? "Published" : "Draft"}</span>
             <a class="button compact" href="${href}" aria-label="${label} ${e(entry.title)}">${label} ${arrow}</a>
           </li>`;
@@ -55,9 +61,9 @@ export function dashboardView(
       ${messages.length ? messages.map((item) => `<article class="inbox-item">
         <div class="entry-meta"><strong>${e(item.name)}</strong><time>${dateLabel(item.created_at)}</time></div>
         <a class="small-link" href="${emailLink(item.email)}">${e(item.email)} ↗</a>
-        <p class="prose">${e(item.body)}</p>
+        ${desk === "/admin" && item.author_handle ? `<p class="muted">To @${e(item.author_handle)}</p>` : ""}<p class="prose">${e(item.body)}</p>
         <div class="item-actions"><span class="entry-state">${item.read_at ? "Read" : "Unread"}</span>
-          <form method="post" action="/admin/inbox/${item.id}/action">
+          <form method="post" action="${desk}/inbox/${item.id}/action">
             ${hidden("csrf", csrf)}
             <button class="button compact" name="action" value="${item.read_at ? "unread" : "read"}">${item.read_at ? "Mark unread" : "Mark read"}</button>
             <button class="button compact" name="action" value="delete">Delete</button>
@@ -80,26 +86,28 @@ export function dashboardView(
   }
   return `<div class="shell studio">
     <header class="studio-heading">
-      <div><p class="eyebrow">Silvergrain Studio</p><h1>Dashboard</h1></div>
+      <div><p class="eyebrow">${desk === "/admin" ? "Site management" : "Contributor studio"}</p><h1>${site.handle ? e(site.name) : "Dashboard"}</h1></div>
       <div class="studio-actions">
-        <a class="button button-light" href="/admin/stories/new">New story <span aria-hidden="true">+</span></a>
+        <a class="button button-light" href="${desk}/stories/new${context}">New story <span aria-hidden="true">+</span></a>
+        ${site.handle ? `<a class="button" href="/${site.handle}">View magazine</a>` : ""}
         <a class="button" href="/signout-with-chatgpt?return_to=%2F" target="_top">Sign out</a>
       </div>
     </header>
     <nav class="studio-nav" aria-label="Dashboard">${nav}</nav>
-    ${notice(message)}${notice(error, true)}${content}
+    ${notice(message)}${notice(error, true)}${stats.requests ? `<p class="notice"><a href="/admin/users?status=pending">Review ${stats.requests} pending contributor request${stats.requests === 1 ? "" : "s"}</a></p>` : ""}
+    ${content}${pager(state.page,state.pages,n=>listUrl(view,n),"Dashboard pages")}
   </div>`;
 }
 
-export function orderView(photos: MagazinePhoto[], revision: string, csrf: string, message: string, error = "") {
+export function orderView(photos: MagazinePhoto[], revision: string, csrf: string, message: string, error = "", desk: Desk = "/admin", publicBase = "", action = desk + "/order") {
   return `<div class="shell studio">
     <header class="studio-heading">
       <div><p class="eyebrow">Silvergrain Studio</p><h1>Photo order</h1></div>
-      <a class="button" href="/">View magazine ${arrow}</a>
+      <a class="button" href="${publicBase || "/"}">View magazine ${arrow}</a>
     </header>
-    <nav class="studio-nav" aria-label="Dashboard">${studioNavigation("order")}</nav>
+    <nav class="studio-nav" aria-label="Dashboard">${studioNavigation("order", desk)}</nav>
     ${notice(message)}${notice(error, true)}
-    ${photos.length ? `<form class="form order-form" method="post" action="/admin/order" data-publication-order>
+    ${photos.length ? `<form class="form order-form" method="post" action="${e(action)}" data-publication-order>
       ${hidden("csrf", csrf)}${hidden("order_revision", revision)}
       <p class="muted order-instructions">Set the reading order. Every magazine page shows 10 photos.</p>
       <ol class="publication-order-list" data-publication-list>
@@ -107,7 +115,7 @@ export function orderView(photos: MagazinePhoto[], revision: string, csrf: strin
           ${hidden("publication_photo", photo.id)}
           <img src="${photoUrl(photo, true)}" alt="" width="96" height="64" loading="lazy">
           <div class="order-photo-title">
-            <a href="${photoPageUrl(photo.slug, photo.id)}">${e(photo.title)}</a>
+            <a href="${publicBase}${photoPageUrl(photo.slug, photo.id)}">${e(photo.title)}</a>
             <p class="muted">${e(photo.location || photo.category)}${photo.demo ? " / Sample" : ""}</p>
           </div>
           <label class="field order-position">Position
@@ -126,23 +134,24 @@ export function orderView(photos: MagazinePhoto[], revision: string, csrf: strin
 
 type Editor = {
   id: string; post: Story | null; photos: Photo[]; values: StoryInput; csrf: string;
+  desk: Desk; publicBase: string; orderAction?: string;
   error?: string; queued?: string; edits?: Record<string, EditPhoto>;
 };
 
 export function editorView(input: Editor) {
-  const { id, post, photos, values, csrf, error, queued, edits } = input;
+  const { id, post, photos, values, csrf, error, queued, edits, desk, publicBase } = input;
   const isPublished = post && post.published_at !== null;
   const save = isPublished
     ? '<button class="button button-light" type="submit" name="intent" value="save">Save changes</button><button class="button" type="submit" name="intent" value="draft">Unpublish</button>'
     : `<button class="button button-light" type="submit" name="intent" value="draft">Save draft</button><button class="button" type="submit" name="intent" value="publish">Publish story ${arrow}</button>`;
   return `<div class="shell studio editor">
-    <a class="small-link back-link" href="/admin"><span aria-hidden="true">←</span> Dashboard</a>
+    <a class="small-link back-link" href="${desk}"><span aria-hidden="true">←</span> Dashboard</a>
     <div class="studio-heading editor-heading">
       <h1>${post ? "Edit story" : "New story"}</h1>
-      ${post ? `<a class="button" href="/stories/${post.slug}">${isPublished ? "View story" : "Preview draft"} ${arrow}</a>` : ""}
+      ${post ? `<a class="button" href="${publicBase}/stories/${post.slug}">${isPublished ? "View story" : "Preview draft"} ${arrow}</a>` : ""}
     </div>
     ${notice(error ?? "", true)}
-    <form class="form editor-form" method="post" data-hosted-editor>
+    <form class="form editor-form" method="post" data-upload-base="${desk}/uploads" data-hosted-editor>
       ${hidden("csrf", csrf)}${hidden("post_id", id)}${hidden("uploads", queued ?? "[]")}${post ? hidden("revision", post.revision) : ""}
       <div class="editor-grid">
         <section class="form editor-panel" aria-label="Story details">
@@ -156,7 +165,7 @@ export function editorView(input: Editor) {
         </section>
         <section class="editor-panel editor-photos" aria-labelledby="photos-heading">
           <h2 id="photos-heading">Photographs</h2>
-          <p class="muted">Add up to ${maxPhotos} photos, each with its own story. Set the magazine sequence in <a href="/admin/order">Photo order</a>.</p>
+          <p class="muted">Add up to ${maxPhotos} photos, each with its own story. Set the magazine sequence in <a href="${e(input.orderAction || desk + "/order")}">Photo order</a>.</p>
           <div class="existing-photos" data-photo-order>
             ${photos.map((photo) => `<div class="editor-photo" data-photo>
               ${hidden("photo_order", photo.id)}
@@ -199,7 +208,7 @@ export function editorView(input: Editor) {
     </form>
     ${post ? `<details class="delete-story">
       <summary>Delete story</summary>
-      <form class="form" method="post" action="/admin/stories/${post.id}/action">
+      <form class="form" method="post" action="${desk}/stories/${post.id}/action">
         ${hidden("csrf", csrf)}${hidden("revision", post.revision)}
         <label class="check"><input type="checkbox" name="confirm" value="yes" required> Delete this story and its photos.</label>
         <button class="button" type="submit" name="action" value="delete">Delete permanently</button>

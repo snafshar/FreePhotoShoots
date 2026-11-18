@@ -95,7 +95,7 @@ if (hostedEditor) {
   const queue = hostedEditor.elements.namedItem("uploads");
   const postId = hostedEditor.elements.namedItem("post_id").value;
   const csrf = hostedEditor.elements.namedItem("csrf").value;
-  const base = `/admin/uploads/${postId}`;
+  const base = `${hostedEditor.dataset.uploadBase}/${postId}`;
   const buttons = [...hostedEditor.querySelectorAll('button[type="submit"]')];
   const entries = [];
   let running = false;
