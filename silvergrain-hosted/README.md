@@ -7,7 +7,7 @@
 - **Inbox** keeps contact form messages and a reply-by-email link.
 - **Settings** controls the name, public email and phone, and whether to show the sample stories.
 
-The magazine uses a white background, black-and-white photographs, and simple photo-and-text spreads. Each photograph opens full screen. Comments and comment submission routes are disabled.
+The magazine uses a cream background, black-and-white photographs, and simple photo-and-text spreads. Each photograph opens full screen. Comments and comment submission routes are disabled.
 
 The editor accepts JPEG, PNG, or WebP photos. It makes two WebP copies in the browser, with maximum long edges of 1,920 and 720 pixels, and leaves camera metadata out. The first photo represents the group in Studio. The magazine and full-screen gallery display all photographs in black and white.
 
